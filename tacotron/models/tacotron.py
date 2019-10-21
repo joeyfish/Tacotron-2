@@ -17,7 +17,7 @@ class Tacotron():
 
 
 	def initialize(self, inputs, input_lengths, mel_targets=None, stop_token_targets=None, targets_lengths=None, gta=False,
-			global_step=None, is_training=False, is_evaluating=False):
+			global_step=None, is_training=False, is_evaluating=False, speaker_num=1):
 		"""
 		Initializes the model for inference
 
@@ -25,12 +25,15 @@ class Tacotron():
 
 		Args:
 			- inputs: int32 Tensor with shape [N, T_in] where N is batch size, T_in is number of
-			  steps in the input time series, and values are character IDs
+			  steps in the input time series, and values are character IDs.
 			- input_lengths: int32 Tensor with shape [N] where N is batch size and values are the lengths
-			of each sequence in inputs.
+				of each sequence in inputs.
 			- mel_targets: float32 Tensor with shape [N, T_out, M] where N is batch size, T_out is number
-			of steps in the output time series, M is num_mels, and values are entries in the mel
-			spectrogram. Only needed for training.
+				of steps in the output time series, M is num_mels, and values are entries in the mel
+				spectrogram. Only needed for training.
+			- speaker_num: int32 scalar, indicating the number of speaker.
+			- speaker_ids: int32 Tensor with shape[N, T_in] where N is batch size and T_in is number of
+			  steps in the input time series, the values are speaker IDs.
 		"""
 		if mel_targets is None and stop_token_targets is not None:
 			raise ValueError('no mel targets were provided but token_targets were given')
@@ -49,22 +52,17 @@ class Tacotron():
 				assert global_step is not None
 
 			# Embeddings ==> [batch_size, sequence_length, embedding_dim]
-			embedding_table = tf.get_variable(
-				'inputs_embedding', [len(symbols), hp.embedding_dim], dtype=tf.float32)
+			embedding_table = tf.get_variable(f'text_embedding', [speaker_num * len(symbols), hp.embedding_dim], dtype=tf.float32)
 			embedded_inputs = tf.nn.embedding_lookup(embedding_table, inputs)
 
-
 			#Encoder Cell ==> [batch_size, encoder_steps, encoder_lstm_units]
-			encoder_cell = TacotronEncoderCell(
-				EncoderConvolutions(is_training, hparams=hp, scope='encoder_convolutions'),
-				EncoderRNN(is_training, size=hp.encoder_lstm_units,
-					zoneout=hp.tacotron_zoneout_rate, scope='encoder_LSTM'))
+			encoder_cell = TacotronEncoderCell(EncoderConvolutions(is_training, hparams=hp, scope='encoder_convolutions'),
+				EncoderRNN(is_training, size=hp.encoder_lstm_units, zoneout=hp.tacotron_zoneout_rate, scope='encoder_LSTM'))
 
 			encoder_outputs = encoder_cell(embedded_inputs, input_lengths)
 
 			#For shape visualization purpose
 			enc_conv_output_shape = encoder_cell.conv_output_shape
-
 
 			#Decoder Parts
 			#Attention Decoder Prenet
@@ -83,12 +81,7 @@ class Tacotron():
 
 
 			#Decoder Cell ==> [batch_size, decoder_steps, num_mels * r] (after decoding)
-			decoder_cell = TacotronDecoderCell(
-				prenet,
-				attention_mechanism,
-				decoder_lstm,
-				frame_projection,
-				stop_projection)
+			decoder_cell = TacotronDecoderCell(prenet, attention_mechanism, decoder_lstm, frame_projection, stop_projection)
 
 
 			#Define the helper for our decoder
@@ -210,7 +203,6 @@ class Tacotron():
 			self.stop_token_loss = stop_token_loss
 			self.regularization_loss = regularization
 			self.attention_loss = attention_loss
-
 			self.loss = self.before_loss + self.after_loss + self.stop_token_loss + self.regularization_loss + self.attention_loss
 
 	def add_optimizer(self, global_step):
@@ -266,7 +258,6 @@ class Tacotron():
 			self.decay_steps,
 			self.decay_rate, #lr = 1e-5 around step 310k
 			name='lr_exponential_decay')
-
 
 		#clip learning rate by max and min values (initial and final values)
 		return tf.minimum(tf.maximum(lr, hp.tacotron_final_learning_rate), init_lr)

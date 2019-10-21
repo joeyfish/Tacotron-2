@@ -5,15 +5,14 @@ import numpy as np
 from datasets import audio
 
 
-def build_from_path(hparams, input_dirs, wav_dir, mel_dir, n_jobs=12, tqdm=lambda x: x):
+def build_from_path(hparams, input_dirs, output_dir, n_jobs=12, tqdm=lambda x: x):
 	"""
 	Preprocesses the speech dataset from a gven input path to given output directories
 
 	Args:
 		- hparams: hyper parameters
 		- input_dir: input directory that contains the files to prerocess
-		- mel_dir: output directory of the preprocessed speech mel-spectrogram dataset
-		- wav_dir: output directory of the preprocessed speech audio dataset
+		- output_dir: output directory of the preprocessed speech audio and mel-spectrogram dataset
 		- n_jobs: Optional, number of worker process to parallelize across
 		- tqdm: Optional, provides a nice progress bar
 
@@ -25,23 +24,26 @@ def build_from_path(hparams, input_dirs, wav_dir, mel_dir, n_jobs=12, tqdm=lambd
 	# optimization purposes and it can be omited
 	executor = ProcessPoolExecutor(max_workers=n_jobs)
 	futures = []
-	index = 1
-	for input_dir in input_dirs:
-		trn_files = glob.glob(os.path.join(input_dir, 'biaobei_48000', '*.trn'))
-		for trn in trn_files:
-			with open(trn) as f:
-				basename = trn[:-4]
-				wav_file = basename + '.wav'
-				wav_path = wav_file
-				basename = basename.split('/')[-1]
-				text = f.readline().strip()
-				futures.append(executor.submit(partial(_process_utterance, wav_dir, mel_dir, basename, wav_path, text, hparams)))
-				index += 1
+	for i, input_dir in enumerate(input_dirs):
+		wav_dir = os.path.join(output_dir, input_dir.split('/')[-1], 'audio')
+		mel_dir = os.path.join(output_dir, input_dir.split('/')[-1], 'mels')
+		os.makedirs(wav_dir, exist_ok=True)
+		os.makedirs(mel_dir, exist_ok=True)
+		for root, _, files in os.walk(input_dir):
+			for f in files:
+				if f.endswith('.trn'):
+					trn_file = os.path.join(root, f)
+					with open(trn_file) as f:
+						basename = trn_file[:-4]
+						wav_file = basename + '.wav'
+						basename = basename.split('/')[-1]
+						text = f.readline().strip()
+						futures.append(executor.submit(partial(_process_utterance, wav_dir, mel_dir, i, basename, wav_file, text, hparams)))
 
 	return [future.result() for future in tqdm(futures) if future.result() is not None]
 
 
-def _process_utterance(wav_dir, mel_dir, index, wav_path, text, hparams):
+def _process_utterance(wav_dir, mel_dir, speaker_id, basename, wav_file, text, hparams):
 	"""
 	Preprocesses a single utterance wav/text pair
 
@@ -51,8 +53,8 @@ def _process_utterance(wav_dir, mel_dir, index, wav_path, text, hparams):
 	Args:
 		- mel_dir: the directory to write the mel spectograms into
 		- wav_dir: the directory to write the preprocessed wav into
-		- index: the numeric index to use in the spectogram filename
-		- wav_path: path to the audio file containing the speech input
+		- basename: the basename of each file
+		- wav_file: path to the audio file containing the speech input
 		- text: text spoken in the input audio file
 		- hparams: hyper parameters
 
@@ -61,10 +63,9 @@ def _process_utterance(wav_dir, mel_dir, index, wav_path, text, hparams):
 	"""
 	try:
 		# Load the audio as numpy array
-		wav = audio.load_wav(wav_path, sr=hparams.sample_rate)
+		wav = audio.load_wav(wav_file, sr=hparams.sample_rate)
 	except FileNotFoundError: #catch missing wav exception
-		print('file {} present in csv metadata is not present in wav folder. skipping!'.format(
-			wav_path))
+		print(f'file {wav_file} present in csv metadata is not present in wav folder. skipping!')
 		return None
 
 	#rescale wav
@@ -95,12 +96,12 @@ def _process_utterance(wav_dir, mel_dir, index, wav_path, text, hparams):
 	time_steps = len(out)
 
 	# Write the spectrogram and audio to disk
-	filename = '{}.npy'.format(index)
+	filename = f'{basename}.npy'
 	np.save(os.path.join(wav_dir, filename), out.astype(np.int16), allow_pickle=False)
-	np.save(os.path.join(mel_dir, filename), mel_spectrogram.T, allow_pickle=False)
+	np.save(os.path.join(mel_dir, filename), mel_spectrogram, allow_pickle=False)
 
 	# Return a tuple describing this training example
-	return (filename, time_steps, mel_frames, text)
+	return (speaker_id, filename, time_steps, mel_frames, text)
 
 
 def label_2_float(x, bits) :

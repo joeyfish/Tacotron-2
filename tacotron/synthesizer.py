@@ -20,10 +20,11 @@ class Synthesizer:
 		targets = tf.placeholder(tf.float32, [None, None, hparams.num_mels], 'mel_targets')
 		with tf.variable_scope('model') as scope:
 			self.model = create_model(model_name, hparams)
+			self.speaker_num = len(hparams.anchor_dirs)
 			if gta:
-				self.model.initialize(inputs, input_lengths, targets, gta=gta)
+				self.model.initialize(inputs, input_lengths, targets, gta=gta, speaker_num=self.speaker_num)
 			else:
-				self.model.initialize(inputs, input_lengths)
+				self.model.initialize(inputs, input_lengths, speaker_num=self.speaker_num)
 			self.alignments = self.model.alignments
 			self.mel_outputs = self.model.mel_outputs
 			self.stop_token_prediction = self.model.stop_token_prediction
@@ -34,10 +35,7 @@ class Synthesizer:
 		self._pad = 0
 		#explicitely setting the padding to a value that doesn't originally exist in the spectogram
 		#to avoid any possible conflicts, without affecting the output range of the model too much
-		if hparams.symmetric_mels:
-			self._target_pad = -(hparams.max_abs_value + .1)
-		else:
-			self._target_pad = -0.1
+		self._target_pad = -(hparams.max_abs_value + .1) if hparams.symmetric_mels else -0.1
 
 		log('Loading checkpoint: %s' % checkpoint_path)
 		#Memory allocation on the GPU as needed
@@ -51,10 +49,10 @@ class Synthesizer:
 		saver.restore(self.session, checkpoint_path)
 
 
-	def synthesize(self, texts, basenames, out_dir, log_dir, mel_filenames):
+	def synthesize(self, batch, basenames, out_dir, log_dir, mel_filenames, speaker_id):
 		hparams = self._hparams
 		cleaner_names = [x.strip() for x in hparams.cleaners.split(',')]
-		seqs = [np.asarray(text_to_sequence(text, cleaner_names)) for text in texts]
+		seqs = [np.asarray(text_to_sequence(text, speaker_id, cleaner_names)) for text in batch]
 		input_lengths = [len(seq) for seq in seqs]
 		seqs = self._prepare_inputs(seqs)
 		feed_dict = {
@@ -63,7 +61,7 @@ class Synthesizer:
 		}
 
 		if self.gta:
-			np_targets = [np.load(mel_filename) for mel_filename in mel_filenames]
+			np_targets = [np.load(mel_filename).T for mel_filename in mel_filenames]
 			target_lengths = [len(np_target) for np_target in np_targets]
 			padded_targets = self._prepare_targets(np_targets, self._hparams.outputs_per_step)
 			feed_dict[self.model.mel_targets] = padded_targets.reshape(len(np_targets), -1, hparams.num_mels)
@@ -73,37 +71,30 @@ class Synthesizer:
 			assert len(mels) == len(np_targets)
 
 		saved_mels_paths = []
-		speaker_ids = []
 		for i, mel in enumerate(mels):
-			#Get speaker id for global conditioning (only used with GTA generally)
-			speaker_id = '<no_g>'
-			speaker_ids.append(speaker_id)
-
 			# Write the spectrogram to disk
 			# Note: outputs mel-spectrogram files and target ones have same names, just different folders
-			mel_filename = os.path.join(out_dir, '{}.npy'.format(basenames[i]))
+			mel_filename = os.path.join(out_dir, f'{basenames[i]}.npy')
 			np.save(mel_filename, mel.T, allow_pickle=False)
 			saved_mels_paths.append(mel_filename)
 
 			if log_dir is not None:
 				#save wav (mel -> wav)
 				wav = audio.inv_mel_spectrogram(mel.T, hparams)
-				audio.save_wav(wav, os.path.join(log_dir, 'wavs/wav-{}-mel.wav'.format(basenames[i])), hparams)
+				audio.save_wav(wav, os.path.join(log_dir, f'wavs/wav-{basenames[i]}-mel.wav'), hparams)
 
 				#save alignments
-				plot.plot_alignment(alignments[i], os.path.join(log_dir, 'plots/alignment-{}.png'.format(basenames[i])),
-					info='{}'.format(texts[i]), split_title=True)
+				plot.plot_alignment(alignments[i], os.path.join(log_dir, f'plots/alignment-{basenames[i]}.png'), info=f'{batch[i]}', split_title=True)
 
 				#save mel spectrogram plot
-				plot.plot_spectrogram(mel, os.path.join(log_dir, 'plots/mel-{}.png'.format(basenames[i])),
-					info='{}'.format(texts[i]), split_title=True)
+				plot.plot_spectrogram(mel, os.path.join(log_dir, f'plots/mel-{basenames[i]}.png'), info=f'{batch[i]}', split_title=True)
 
-		return saved_mels_paths, speaker_ids
+		return saved_mels_paths
 
-	def eval(self, batch):
+	def eval(self, batch, speaker_id):
 		hparams = self._hparams
 		cleaner_names = [x.strip() for x in hparams.cleaners.split(',')]
-		seqs = [np.asarray(text_to_sequence(text, cleaner_names)) for text in batch]
+		seqs = [np.asarray(text_to_sequence(text, speaker_id, cleaner_names)) for text in batch]
 		input_lengths = [len(seq) for seq in seqs]
 		seqs = self._prepare_inputs(seqs)
 		feed_dict = {

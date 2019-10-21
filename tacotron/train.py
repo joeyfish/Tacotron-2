@@ -57,7 +57,8 @@ def model_train_mode(args, feeder, hparams, global_step):
 			model_name = 'Tacotron'
 		model = create_model(model_name or args.model, hparams)
 		model.initialize(feeder.inputs, feeder.input_lengths, feeder.mel_targets, feeder.token_targets,
-				targets_lengths=feeder.targets_lengths, global_step=global_step, is_training=True)
+				targets_lengths=feeder.targets_lengths, global_step=global_step, is_training=True,
+				speaker_num=feeder.speaker_num)
 		model.add_loss()
 		model.add_optimizer(global_step)
 		stats = add_train_stats(model, hparams)
@@ -70,7 +71,8 @@ def model_test_mode(args, feeder, hparams, global_step):
 			model_name = 'Tacotron'
 		model = create_model(model_name or args.model, hparams)
 		model.initialize(feeder.eval_inputs, feeder.eval_input_lengths, feeder.eval_mel_targets, feeder.eval_token_targets,
-				targets_lengths=feeder.eval_targets_lengths, global_step=global_step, is_training=False, is_evaluating=True)
+				targets_lengths=feeder.eval_targets_lengths, global_step=global_step, is_training=False,
+				is_evaluating=True, speaker_num=feeder.speaker_num)
 		model.add_loss()
 		return model
 
@@ -241,7 +243,6 @@ def train(log_dir, args, hparams):
 					plot.plot_spectrogram(mel_prediction, os.path.join(plot_dir, 'step-{}-mel-spectrogram.png'.format(step)),
 						info='{}, {}, step={}, loss={:.5}'.format(args.model, time_string(), step, loss), target_spectrogram=target,
 						max_len=target_length)
-					log('Input at step {}: {}'.format(step, sequence_to_text(input_seq)))
 
 			log('Tacotron training complete after {} global steps!'.format(args.tacotron_train_steps), slack=True)
 			return save_dir

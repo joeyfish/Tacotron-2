@@ -7,8 +7,7 @@ from tensorflow.python.ops import array_ops, math_ops, nn_ops, variable_scope
 
 
 #From https://github.com/tensorflow/tensorflow/blob/r1.7/tensorflow/contrib/seq2seq/python/ops/attention_wrapper.py
-def _compute_attention(attention_mechanism, cell_output, attention_state,
-					   attention_layer, prev_max_attentions):
+def _compute_attention(attention_mechanism, cell_output, attention_state, attention_layer, prev_max_attentions):
 	"""Computes the attention and alignments for a given attention_mechanism."""
 	alignments, next_attention_state, max_attentions = attention_mechanism(
 		cell_output, state=attention_state, prev_max_attentions=prev_max_attentions)
@@ -109,15 +108,15 @@ class LocationSensitiveAttention(BahdanauAttention):
 	"""
 
 	def __init__(self,
-				 num_units,
-				 memory,
-				 hparams,
-				 is_training,
-				 mask_encoder=True,
-				 memory_sequence_length=None,
-				 smoothing=False,
-				 cumulate_weights=True,
-				 name='LocationSensitiveAttention'):
+			num_units,
+			memory,
+			hparams,
+			is_training,
+			mask_encoder=True,
+			memory_sequence_length=None,
+			smoothing=False,
+			cumulate_weights=True,
+			name='LocationSensitiveAttention'):
 		"""Construct the Attention mechanism.
 		Args:
 			num_units: The depth of the query mechanism.

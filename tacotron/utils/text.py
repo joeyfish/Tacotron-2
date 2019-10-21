@@ -11,7 +11,7 @@ _id_to_symbol = {i: s for i, s in enumerate(symbols)}
 _curly_re = re.compile(r'(.*?)\{(.+?)\}(.*)')
 
 
-def text_to_sequence(text, cleaner_names):
+def text_to_sequence(text, speaker_id, cleaner_names):
   '''Converts a string of text to a sequence of IDs corresponding to the symbols in the text.
 
     The text can optionally have ARPAbet sequences enclosed in curly braces embedded
@@ -38,12 +38,13 @@ def text_to_sequence(text, cleaner_names):
 
   # Append EOS token
   sequence.append(_symbol_to_id['~'])
-  return sequence
+  return [s + speaker_id * len(symbols) for s in sequence]
 
 
-def sequence_to_text(sequence):
+def sequence_to_text(sequence, speaker_id):
   '''Converts a sequence of IDs back to a string'''
   result = ''
+  sequence = [s - speaker_id * len(symbols) for s in sequence]
   for symbol_id in sequence:
     if symbol_id in _id_to_symbol:
       s = _id_to_symbol[symbol_id]
