@@ -44,8 +44,6 @@ def main():
 	parser = argparse.ArgumentParser()
 	parser.add_argument('--base_dir', default='')
 	parser.add_argument('--hparams', default='', help='Hyperparameter overrides as a comma-separated list of name=value pairs')
-	parser.add_argument('--tacotron_input', default='training_data/train.txt')
-	parser.add_argument('--wavenet_input', default='tacotron_output/gta/map.txt')
 	parser.add_argument('--name', help='Name of logging directory.')
 	parser.add_argument('--model', default='Tacotron')
 	parser.add_argument('--input_dir', default='training_data', help='folder to contain inputs sentences/targets')

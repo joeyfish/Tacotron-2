@@ -14,7 +14,7 @@ class Feeder:
 	"""
 	Feeds batches of data into queue on a background thread.
 	"""
-	def __init__(self, coordinator, metadata_filename, hparams):
+	def __init__(self, coordinator, metadata_dir, hparams):
 		super(Feeder, self).__init__()
 		self._coord = coordinator
 		self._hparams = hparams
@@ -38,18 +38,17 @@ class Feeder:
 		self.speaker_num = len(self._hparams.anchor_dirs)
 		self._train_offset = np.zeros(self.speaker_num, dtype=np.int32)
 		self._test_offset = np.zeros(self.speaker_num, dtype=np.int32)
-		self._metadata = [[] for i in range(self.speaker_num)]
-		self._mel_dirs = [os.path.join(os.path.dirname(metadata_filename), hparams.anchor_dirs[i], 'mels') for i in range(self.speaker_num)]
+		self._metadata = []
+		self._mel_dirs = [os.path.join(metadata_dir, hparams.anchor_dirs[i], 'mels') for i in range(self.speaker_num)]
 
 		# Load metadata
-		with open(metadata_filename, encoding='utf-8') as f:
-			metadata = [line.strip().split('|') for line in f]
-			frame_shift_ms = hparams.hop_size / hparams.sample_rate
-			for m in metadata:
-				self._metadata[int(m[0])].append(m[1:])
-			for i in range(self.speaker_num):
-				hours = sum([int(x[2]) for x in self._metadata[i]]) * frame_shift_ms / 3600
-				log(f'Loaded {hparams.anchor_dirs[i]} for {len(self._metadata[i])} examples ({hours:.2f} hours)')
+		frame_shift_ms = hparams.hop_size / hparams.sample_rate
+		for i in range(self.speaker_num):
+			with open(os.path.join(metadata_dir, hparams.anchor_dirs[i], 'train.txt'), encoding='utf-8') as f:
+				metadata = [line.strip().split('|') for line in f]
+				self._metadata.append(metadata)
+				hours = sum([int(x[2]) for x in metadata]) * frame_shift_ms / 3600
+				log(f'Loaded {hparams.anchor_dirs[i]} for {len(metadata)} examples ({hours:.2f} hours)')
 
 		# training and test set indices
 		indices = [np.arange(len(self._metadata[i])) for i in range(self.speaker_num)]

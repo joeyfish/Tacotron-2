@@ -95,7 +95,7 @@ def train(log_dir, args, hparams):
 	os.makedirs(tensorboard_dir, exist_ok=True)
 
 	checkpoint_path = os.path.join(save_dir, 'tacotron_model.ckpt')
-	input_path = os.path.join(args.base_dir, args.tacotron_input)
+	input_path = os.path.join(args.base_dir, args.input_dir)
 
 	log('Checkpoint path: {}'.format(checkpoint_path))
 	log('Loading training data from: {}'.format(input_path))

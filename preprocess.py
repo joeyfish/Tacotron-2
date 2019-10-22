@@ -8,21 +8,30 @@ from tqdm import tqdm
 
 
 def preprocess(args, input_folders, output_dir, hparams):
-	metadata = preprocessor.build_from_path(hparams, input_folders, output_dir, args.n_jobs, tqdm=tqdm)
-	write_metadata(metadata, output_dir)
+	mel_frames, timesteps = 0, 0
+	max_text_lens, max_mel_lens, max_timestep_lens = [], [], []
 
-def write_metadata(metadata, out_dir):
-	with open(os.path.join(out_dir, 'train.txt'), 'a', encoding='utf-8') as f:
-		for m in metadata:
-			f.write('|'.join([str(x) for x in m]) + '\n')
-	mel_frames = sum([int(m[3]) for m in metadata])
-	timesteps = sum([int(m[2]) for m in metadata])
-	sr = hparams.sample_rate
-	hours = timesteps / sr / 3600
+	for input_dir in input_folders:
+		wav_dir = os.path.join(output_dir, input_dir.split('/')[-1], 'audio')
+		mel_dir = os.path.join(output_dir, input_dir.split('/')[-1], 'mels')
+		os.makedirs(wav_dir, exist_ok=True)
+		os.makedirs(mel_dir, exist_ok=True)
+		metadata = preprocessor.build_from_path(hparams, input_dir, wav_dir, mel_dir, args.n_jobs, tqdm=tqdm)
+		with open(os.path.join(output_dir, input_dir.split('/')[-1], 'train.txt'), 'w') as f:
+			for m in metadata:
+				f.write('|'.join([str(x) for x in m]) + '\n')
+		max_text_lens.append(max(len(m[3]) for m in metadata))
+		max_mel_lens.append(max(int(m[2]) for m in metadata))
+		max_timestep_lens.append(max(m[1] for m in metadata))
+		mel_frames += sum([int(m[2]) for m in metadata])
+		timesteps += sum([int(m[1]) for m in metadata])
+
+	hours = timesteps / hparams.sample_rate / 3600
 	print(f'Write {len(metadata)} utterances, {mel_frames} mel frames, {timesteps} audio timesteps, ({hours:.2f} hours)')
-	print(f'Max input length (text chars): {max(len(m[4]) for m in metadata)}')
-	print(f'Max mel frames length: {max(int(m[3]) for m in metadata)}')
-	print(f'Max audio timesteps length: {max(m[2] for m in metadata)}')
+	print(f'Max input length (text chars): {max(max_text_lens)}')
+	print(f'Max mel frames length: {max(max_mel_lens)}')
+	print(f'Max audio timesteps length: {max(max_timestep_lens)}')
+
 
 def norm_data(args):
 
