@@ -67,9 +67,8 @@ def run_eval(args, checkpoint_path, output_dir, hparams, sentences):
 		np.save(mel_filename, mel.T, allow_pickle=False)
 		wav = audio.inv_mel_spectrogram(mel.T, hparams)
 		audio.save_wav(wav, os.path.join(eval_dir, f'{i:03d}.wav'), hparams)
-
 	end = time.time() - start
-	log('\nGenerated total batch of {delta_size} in {end:.3f} sec')
+	log(f'Generated total batch of {delta_size} in {end:.3f} sec')
 
 
 def run_synthesis(args, checkpoint_path, output_dir, hparams):
