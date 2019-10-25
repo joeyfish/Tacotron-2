@@ -31,7 +31,7 @@ def get_sentences(args):
 		sentences = list(map(lambda l: l.strip(), lines[1::2]))
 	else:
 		sentences = hparams.sentences
-	return list(map(lambda s: s + _eos, sentences))
+	return list(map(lambda s: s + ' .' + _eos, sentences))
 
 
 def main():
