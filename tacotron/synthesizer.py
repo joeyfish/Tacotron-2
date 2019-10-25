@@ -37,7 +37,11 @@ class Synthesizer:
 		#to avoid any possible conflicts, without affecting the output range of the model too much
 		self._target_pad = -(hparams.max_abs_value + .1) if hparams.symmetric_mels else -0.1
 
+		self.checkpoint_path = checkpoint_path
 		log('Loading checkpoint: %s' % checkpoint_path)
+
+
+	def session_open(self):
 		#Memory allocation on the GPU as needed
 		config = tf.ConfigProto()
 		config.gpu_options.allow_growth = True
@@ -46,7 +50,11 @@ class Synthesizer:
 		self.session.run(tf.global_variables_initializer())
 
 		saver = tf.train.Saver()
-		saver.restore(self.session, checkpoint_path)
+		saver.restore(self.session, self.checkpoint_path)
+
+
+	def session_close(self):
+		self.session.close()
 
 
 	def synthesize(self, batch, basenames, out_dir, log_dir, mel_filenames, speaker_id):

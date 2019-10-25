@@ -9,8 +9,6 @@ from infolog import log
 from tacotron.synthesize import tacotron_synthesize
 from tacotron.train import tacotron_train
 
-log = infolog.log
-
 
 def save_seq(file, sequence, input_path):
 	'''Save Tacotron-2 training state to disk. (To skip for future runs)

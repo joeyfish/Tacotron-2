@@ -140,18 +140,18 @@ class Tacotron():
 			self.mel_targets = mel_targets
 			self.targets_lengths = targets_lengths
 			log('Initialized Tacotron model. Dimensions (? = dynamic shape): ')
-			log('  Train mode:               {}'.format(is_training))
-			log('  Eval mode:                {}'.format(is_evaluating))
-			log('  GTA mode:                 {}'.format(gta))
-			log('  Synthesis mode:           {}'.format(not (is_training or is_evaluating)))
-			log('  embedding:                {}'.format(embedded_inputs.shape))
-			log('  enc conv out:             {}'.format(enc_conv_output_shape))
-			log('  encoder out:              {}'.format(encoder_outputs.shape))
-			log('  decoder out:              {}'.format(decoder_output.shape))
-			log('  residual out:             {}'.format(residual.shape))
-			log('  projected residual out:   {}'.format(projected_residual.shape))
-			log('  mel out:                  {}'.format(mel_outputs.shape))
-			log('  <stop_token> out:         {}'.format(stop_token_prediction.shape))
+			log(f'  Train mode:               {is_training}')
+			log(f'  Eval mode:                {is_evaluating}')
+			log(f'  GTA mode:                 {gta}')
+			log(f'  Synthesis mode:           {not (is_training or is_evaluating)}')
+			log(f'  embedding:                {embedded_inputs.shape}')
+			log(f'  enc conv out:             {enc_conv_output_shape}')
+			log(f'  encoder out:              {encoder_outputs.shape}')
+			log(f'  decoder out:              {decoder_output.shape}')
+			log(f'  residual out:             {residual.shape}')
+			log(f'  projected residual out:   {projected_residual.shape}')
+			log(f'  mel out:                  {mel_outputs.shape}')
+			log(f'  <stop_token> out:         {stop_token_prediction.shape}')
 
 
 	def add_loss(self):

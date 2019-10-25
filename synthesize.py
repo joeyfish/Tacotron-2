@@ -1,12 +1,10 @@
 import argparse
 import os
-from warnings import warn
-
 import tensorflow as tf
-
 from hparams import hparams
 from infolog import log
 from tacotron.synthesize import tacotron_synthesize
+from tacotron.utils.symbols import _eos
 
 
 def prepare_run(args):
@@ -21,18 +19,19 @@ def prepare_run(args):
 	wave_checkpoint = os.path.join('logs-' + run_name, 'wave_' + args.checkpoint)
 	return taco_checkpoint, wave_checkpoint, modified_hp
 
+
 def get_sentences(args):
-	if args.text_list:
+	if args.text:
 		try:
-			f = open(args.text_list)
+			f = open(args.text)
 			lines = f.readlines()
 		except UnicodeDecodeError:
-			f = open(args.text_list, encoding='gbk')
+			f = open(args.text, encoding='gbk')
 			lines = f.readlines()
 		sentences = list(map(lambda l: l.strip(), lines[1::2]))
 	else:
 		sentences = hparams.sentences
-	return sentences
+	return list(map(lambda s: s + _eos, sentences))
 
 
 def main():
@@ -49,7 +48,7 @@ def main():
 	parser.add_argument('--output_dir', default='output/', help='folder to contain synthesized mel spectrograms')
 	parser.add_argument('--mode', default='eval', help=f'mode of run: can be one of {accepted_modes}')
 	parser.add_argument('--GTA', default='True', help='Ground truth aligned synthesis, defaults to True, only considered in synthesis mode')
-	parser.add_argument('--text_list', default='', help='Text file contains list of texts to be synthesized. Valid if mode=eval')
+	parser.add_argument('--text', default='', help='Text file contains list of texts to be synthesized. Valid if mode=eval')
 	parser.add_argument('--speaker_id', default=0, type=int, help='Defines the speakers ids to use when running standalone Wavenet on a folder of mels. this variable must be a comma-separated list of ids')
 	args = parser.parse_args()
 

@@ -102,7 +102,7 @@ class EncoderConvolutions:
 			x = inputs
 			for i in range(self.enc_conv_num_layers):
 				x = conv1d(x, self.kernel_size, self.channels, self.activation,
-					self.is_training, self.bnorm, 'conv_layer_{}_'.format(i + 1)+self.scope)
+					self.is_training, self.bnorm, f'conv_layer_{i+1}_' + self.scope)
 		return x
 
 
@@ -175,11 +175,11 @@ class Prenet:
 		with tf.variable_scope(self.scope):
 			for i, size in enumerate(self.layers_sizes):
 				dense = tf.layers.dense(x, units=size, activation=self.activation,
-					name='dense_{}'.format(i + 1))
+					name=f'dense_{i+1}')
 				#The paper discussed introducing diversity in generation at inference time
 				#by using a dropout of 0.5 only in prenet layers (in both training and inference).
 				x = tf.layers.dropout(dense, rate=self.drop_rate, training=True,
-					name='dropout_{}'.format(i + 1) + self.scope)
+					name=f'dropout_{i+1}' + self.scope)
 		return x
 
 
@@ -206,7 +206,7 @@ class DecoderRNN:
 		self.rnn_layers = [ZoneoutLSTMCell(size, is_training,
 			zoneout_factor_cell=zoneout,
 			zoneout_factor_output=zoneout,
-			name='decoder_LSTM_{}'.format(i+1)) for i in range(layers)]
+			name=f'decoder_LSTM_{i+1}') for i in range(layers)]
 
 		self._cell = tf.contrib.rnn.MultiRNNCell(self.rnn_layers, state_is_tuple=True)
 
@@ -231,14 +231,14 @@ class FrameProjection:
 		self.activation = activation
 
 		self.scope = 'Linear_projection' if scope is None else scope
-		self.dense = tf.layers.Dense(units=shape, activation=activation, name='projection_{}'.format(self.scope))
+		self.dense = tf.layers.Dense(units=shape, activation=activation, name=f'projection_{self.scope}')
 
 	def __call__(self, inputs):
 		with tf.variable_scope(self.scope):
 			#If activation==None, this returns a simple Linear projection
 			#else the projection will be passed through an activation function
 			# output = tf.layers.dense(inputs, units=self.shape, activation=self.activation,
-			# 	name='projection_{}'.format(self.scope))
+			# 	name=f'projection_{self.scope}')
 			output = self.dense(inputs)
 
 			return output
@@ -265,8 +265,7 @@ class StopProjection:
 
 	def __call__(self, inputs):
 		with tf.variable_scope(self.scope):
-			output = tf.layers.dense(inputs, units=self.shape,
-				activation=None, name='projection_{}'.format(self.scope))
+			output = tf.layers.dense(inputs, units=self.shape, activation=None, name=f'projection_{self.scope}')
 
 			#During training, don't use activation as it is integrated inside the sigmoid_cross_entropy loss function
 			if self.is_training:
@@ -302,9 +301,9 @@ class Postnet:
 			x = inputs
 			for i in range(self.postnet_num_layers - 1):
 				x = conv1d(x, self.kernel_size, self.channels, self.activation,
-					self.is_training, self.bnorm, 'conv_layer_{}_'.format(i + 1)+self.scope)
+					self.is_training, self.bnorm, f'conv_layer_{i+1}_' + self.scope)
 			x = conv1d(x, self.kernel_size, self.channels, lambda _: _, self.is_training, self.bnorm,
-				'conv_layer_{}_'.format(5)+self.scope)
+				'conv_layer_5_' + self.scope)
 		return x
 
 

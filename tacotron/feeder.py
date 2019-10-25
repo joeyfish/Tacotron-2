@@ -136,7 +136,8 @@ class Feeder:
 		# Bucket examples based on similar output sequence length for efficiency
 		batches = [examples[i: i+n] for j in range(0, len(examples), n)]
 		np.random.shuffle(batches)
-		log('\nGenerated {} test batches of size {} in {:.3f} sec'.format(len(batches), n, time.time() - start))
+		end = time.time() - start
+		log(f'Generated {len(batches)} test batches of size {n} in {end:.3f} sec')
 		return batches
 
 	def _enqueue_next_train_group(self):
@@ -153,7 +154,8 @@ class Feeder:
 			# Bucket examples based on similar output sequence length for efficiency
 			batches = [examples[i: i+n] for i in range(0, len(examples), n)]
 			np.random.shuffle(batches)
-			log('\nGenerated {} train batches of size {} in {:.3f} sec'.format(len(batches), n, time.time() - start))
+			end = time.time() - start
+			log(f'Generated {len(batches)} train batches of size {n} in {end:.3f} sec')
 			for batch in batches:
 				feed_dict = dict(zip(self._placeholders, self._prepare_batch(batch, self._hparams.outputs_per_step)))
 				self._session.run(self._enqueue_op, feed_dict=feed_dict)

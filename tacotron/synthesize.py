@@ -21,6 +21,7 @@ def run_live(args, checkpoint_path, hparams):
 	log(hparams_debug_string())
 	synth = Synthesizer()
 	synth.load(checkpoint_path, hparams)
+	synth.session_open()
 
 	#Generate fast greeting message
 	greetings = 'Hello, Welcome to the Live testing tool. Please type a message and I will try to read it!'
@@ -39,6 +40,8 @@ def run_live(args, checkpoint_path, hparams):
 			generate_fast(synth, leave)
 			sleep(2)
 			break
+	synth.session_close()
+
 
 def run_eval(args, checkpoint_path, output_dir, hparams, sentences):
 	eval_dir = os.path.join(output_dir, 'eval')
@@ -56,6 +59,7 @@ def run_eval(args, checkpoint_path, output_dir, hparams, sentences):
 	log(hparams_debug_string())
 	synth = Synthesizer()
 	synth.load(checkpoint_path, hparams)
+	synth.session_open()
 
 	sentences = list(map(lambda s: s.strip(), sentences))
 	delta_size = hparams.tacotron_synthesis_batch_size if hparams.tacotron_synthesis_batch_size < len(sentences) else len(sentences)
@@ -69,6 +73,7 @@ def run_eval(args, checkpoint_path, output_dir, hparams, sentences):
 		audio.save_wav(wav, os.path.join(eval_dir, f'{i:03d}.wav'), hparams)
 	end = time.time() - start
 	log(f'Generated total batch of {delta_size} in {end:.3f} sec')
+	synth.session_close()
 
 
 def run_synthesis(args, checkpoint_path, output_dir, hparams):
@@ -87,6 +92,7 @@ def run_synthesis(args, checkpoint_path, output_dir, hparams):
 	log(hparams_debug_string())
 	synth = Synthesizer()
 	synth.load(checkpoint_path, hparams, gta=GTA)
+	synth.session_open()
 
 	speaker_num = len(hparams.anchor_dirs)
 	metadata_groups = [[] for i in range(speaker_num)]
@@ -97,7 +103,7 @@ def run_synthesis(args, checkpoint_path, output_dir, hparams):
 		for m in metadata:
 			metadata_groups[int(m[0])].append(m[1:])
 		for i in range(speaker_num):
-			hours = sum([int(x[2]) for x in metadata_groups[i]]) * frame_shift_ms / (3600)
+			hours = sum([int(x[2]) for x in metadata_groups[i]]) * frame_shift_ms / 3600
 			log(f'Loaded {hparams.anchor_dirs[i]} for {len(metadata_groups[i])} examples ({hours:.2f} hours)')
 
 	log('starting synthesis')
@@ -112,6 +118,7 @@ def run_synthesis(args, checkpoint_path, output_dir, hparams):
 			basenames = [os.path.basename(m).replace('.npy', '').replace('mel-', '') for m in mel_filenames]
 			synth.synthesize(texts, basenames, synth_dir, None, mel_filenames, speaker_id)
 	log(f'synthesized mel spectrograms at {synth_dir}')
+	synth.session_close()
 
 
 def tacotron_synthesize(args, hparams, checkpoint, sentences=None):

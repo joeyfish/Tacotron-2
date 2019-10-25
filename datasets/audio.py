@@ -24,20 +24,6 @@ def preemphasis(wav, k):
 def inv_preemphasis(wav, k):
 	return signal.lfilter([1], [1, -k], wav)
 
-#From https://github.com/r9y9/wavenet_vocoder/blob/master/audio.py
-def start_and_end_indices(quantized, silence_threshold=2):
-	for start in range(quantized.size):
-		if abs(quantized[start] - 127) > silence_threshold:
-			break
-	for end in range(quantized.size - 1, 1, -1):
-		if abs(quantized[end] - 127) > silence_threshold:
-			break
-
-	assert abs(quantized[start] - 127) > silence_threshold
-	assert abs(quantized[end] - 127) > silence_threshold
-
-	return start, end
-
 def trim_silence(wav, hparams):
 	'''Trim leading and trailing silence
 
@@ -148,27 +134,6 @@ def _stft(y, hparams):
 
 def _istft(y, hparams):
 	return librosa.istft(y, hop_length=get_hop_size(hparams), win_length=hparams.win_size)
-
-def num_frames(length, fsize, fshift):
-	"""Compute number of time frames of spectrogram
-	"""
-	pad = (fsize - fshift)
-	if length % fshift == 0:
-		M = (length + pad * 2 - fsize) // fshift + 1
-	else:
-		M = (length + pad * 2 - fsize) // fshift + 2
-	return M
-
-
-def pad_lr(x, fsize, fshift):
-	"""Compute left and right padding
-	"""
-	M = num_frames(len(x), fsize, fshift)
-	pad = (fsize - fshift)
-	T = len(x) + 2 * pad
-	r = (M - 1) * fshift + fsize - T
-	return pad, pad + r
-
 
 # Conversions
 _mel_basis = None

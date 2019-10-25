@@ -97,9 +97,9 @@ def train(log_dir, args, hparams):
 	checkpoint_path = os.path.join(save_dir, 'tacotron_model.ckpt')
 	input_path = os.path.join(args.base_dir, args.input_dir)
 
-	log('Checkpoint path: {}'.format(checkpoint_path))
-	log('Loading training data from: {}'.format(input_path))
-	log('Using model: {}'.format(args.model))
+	log(f'Checkpoint path: {checkpoint_path}')
+	log(f'Loading training data from: {input_path}')
+	log(f'Using model: {args.model}')
 	log(hparams_debug_string())
 
 	#Start by setting a seed for repeatability
@@ -121,7 +121,7 @@ def train(log_dir, args, hparams):
 	loss_window = ValueWindow(100)
 	saver = tf.train.Saver(max_to_keep=1)
 
-	log('Tacotron training set to a maximum of {} steps'.format(args.tacotron_train_steps))
+	log(f'Tacotron training set to a maximum of {args.tacotron_train_steps} steps')
 
 	#Memory allocation on the GPU as needed
 	config = tf.ConfigProto()
@@ -139,13 +139,13 @@ def train(log_dir, args, hparams):
 				try:
 					checkpoint_state = tf.train.get_checkpoint_state(save_dir)
 					if (checkpoint_state and checkpoint_state.model_checkpoint_path):
-						log('Loading checkpoint {}'.format(checkpoint_state.model_checkpoint_path), slack=True)
+						log(f'Loading checkpoint {checkpoint_state.model_checkpoint_path}', slack=True)
 						saver.restore(sess, checkpoint_state.model_checkpoint_path)
 					else:
-						log('No model to load at {}'.format(save_dir), slack=True)
+						log(f'No model to load at {save_dir}', slack=True)
 
 				except tf.errors.OutOfRangeError as e:
-					log('Cannot restore checkpoint: {}'.format(e), slack=True)
+					log(f'Cannot restore checkpoint: {e}', slack=True)
 			else:
 				log('Starting new training!', slack=True)
 
@@ -158,21 +158,20 @@ def train(log_dir, args, hparams):
 				step, loss, opt = sess.run([global_step, model.loss, model.optimize])
 				time_window.append(time.time() - start_time)
 				loss_window.append(loss)
-				message = 'Step {:7d} [{:.3f} sec/step, loss={:.5f}, avg_loss={:.5f}]'.format(
-					step, time_window.average, loss, loss_window.average)
+				message = f'Step {step:7d} [{time_window.average:.3f} sec/step, loss={loss:.5f}, avg_loss={loss_window.average:.5f}]'
 				log(message, end='\r', slack=(step % args.checkpoint_interval == 0))
 
 				if loss > 100 or np.isnan(loss):
-					log('Loss exploded to {:.5f} at step {}'.format(loss, step))
+					log(f'Loss exploded to {loss:.5f} at step {step}')
 					raise Exception('Loss exploded')
 
 				if step % args.summary_interval == 0:
-					log('\nWriting summary at step {}'.format(step))
+					log(f'Writing summary at step {step}')
 					summary_writer.add_summary(sess.run(stats), step)
 
 				if step % args.eval_interval == 0:
 					#Run eval and save eval stats
-					log('\nRunning evaluation at step {}'.format(step))
+					log(f'Running evaluation at step {step}')
 
 					eval_losses = []
 					before_losses = []
@@ -197,19 +196,19 @@ def train(log_dir, args, hparams):
 					stop_token_loss = sum(stop_token_losses) / len(stop_token_losses)
 					attention_loss = sum(attention_losses) / len(attention_losses)
 
-					log('Saving eval log to {}..'.format(eval_dir))
+					log(f'Saving eval log to {eval_dir}..')
 					# #Save some log to monitor model improvement on same unseen sequence
 					wav = audio.inv_mel_spectrogram(mel_p.T, hparams)
-					audio.save_wav(wav, os.path.join(eval_wav_dir, 'step-{}-eval-waveform-mel.wav'.format(step)), hparams)
+					audio.save_wav(wav, os.path.join(eval_wav_dir, f'step-{step}-eval-waveform-mel.wav'), hparams)
 
-					plot.plot_alignment(align, os.path.join(eval_plot_dir, 'step-{}-eval-align.png'.format(step)),
-						info='{}, {}, step={}, loss={:.5f}'.format(args.model, time_string(), step, eval_loss),
+					plot.plot_alignment(align, os.path.join(eval_plot_dir, f'step-{step}-eval-align.png'),
+						info=f'{args.model}, {time_string()}, step={step}, loss={eval_loss:.5f}',
 						max_len=t_len // hparams.outputs_per_step)
-					plot.plot_spectrogram(mel_p, os.path.join(eval_plot_dir, 'step-{}-eval-mel-spectrogram.png'.format(step)),
-						info='{}, {}, step={}, loss={:.5}'.format(args.model, time_string(), step, eval_loss), target_spectrogram=mel_t,
+					plot.plot_spectrogram(mel_p, os.path.join(eval_plot_dir, f'step-{step}-eval-mel-spectrogram.png'),
+						info=f'{args.model}, {time_string()}, step={step}, loss={eval_loss:.5f}', target_spectrogram=mel_t,
 						max_len=t_len)
 
-					log('Eval loss for global step {}: {:.3f}'.format(step, eval_loss))
+					log(f'Eval loss for global step {step}: {eval_loss:.3f}')
 					log('Writing eval summary!')
 					add_eval_stats(summary_writer, step, before_loss, after_loss, stop_token_loss, attention_loss, eval_loss)
 
@@ -228,27 +227,27 @@ def train(log_dir, args, hparams):
 							])
 
 					#save predicted mel spectrogram to disk (debug)
-					mel_filename = 'mel-prediction-step-{}.npy'.format(step)
+					mel_filename = f'mel-prediction-step-{step}.npy'
 					np.save(os.path.join(mel_dir, mel_filename), mel_prediction.T, allow_pickle=False)
 
 					#save griffin lim inverted wav for debug (mel -> wav)
 					wav = audio.inv_mel_spectrogram(mel_prediction.T, hparams)
-					audio.save_wav(wav, os.path.join(wav_dir, 'step-{}-wave-from-mel.wav'.format(step)), hparams)
+					audio.save_wav(wav, os.path.join(wav_dir, f'step-{step}-wave-from-mel.wav'), hparams)
 
 					#save alignment plot to disk (control purposes)
-					plot.plot_alignment(alignment, os.path.join(plot_dir, 'step-{}-align.png'.format(step)),
-						info='{}, {}, step={}, loss={:.5f}'.format(args.model, time_string(), step, loss),
+					plot.plot_alignment(alignment, os.path.join(plot_dir, f'step-{step}-align.png'),
+						info=f'{args.model}, {time_string()}, step={step}, loss={loss:.5f}',
 						max_len=target_length // hparams.outputs_per_step)
 					#save real and predicted mel-spectrogram plot to disk (control purposes)
-					plot.plot_spectrogram(mel_prediction, os.path.join(plot_dir, 'step-{}-mel-spectrogram.png'.format(step)),
-						info='{}, {}, step={}, loss={:.5}'.format(args.model, time_string(), step, loss), target_spectrogram=target,
+					plot.plot_spectrogram(mel_prediction, os.path.join(plot_dir, f'step-{step}-mel-spectrogram.png'),
+						info=f'{args.model}, {time_string()}, step={step}, loss={loss:.5}', target_spectrogram=target,
 						max_len=target_length)
 
-			log('Tacotron training complete after {} global steps!'.format(args.tacotron_train_steps), slack=True)
+			log(f'Tacotron training complete after {args.tacotron_train_steps} global steps!', slack=True)
 			return save_dir
 
 		except Exception as e:
-			log('Exiting due to exception: {}'.format(e), slack=True)
+			log(f'Exiting due to exception: {e}', slack=True)
 			traceback.print_exc()
 			coord.request_stop(e)
 
