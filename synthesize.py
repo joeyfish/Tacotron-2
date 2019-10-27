@@ -4,7 +4,6 @@ import tensorflow as tf
 from hparams import hparams
 from infolog import log
 from tacotron.synthesize import tacotron_synthesize
-from tacotron.utils.symbols import _eos
 
 
 def prepare_run(args):
@@ -31,7 +30,7 @@ def get_sentences(args):
 		sentences = list(map(lambda l: l.strip(), lines[1::2]))
 	else:
 		sentences = hparams.sentences
-	return list(map(lambda s: s + ' .' + _eos, sentences))
+	return list(map(lambda s: s + ' .', sentences))
 
 
 def main():
