@@ -95,21 +95,16 @@ def run_synthesis(args, checkpoint_path, output_dir, hparams):
 	synth.session_open()
 
 	speaker_num = len(hparams.anchor_dirs)
-	metadata_groups = [[] for i in range(speaker_num)]
-	metadata_filename = os.path.join(args.input_dir, 'train.txt')
-	with open(metadata_filename, encoding='utf-8') as f:
-		metadata = [line.strip().split('|') for line in f]
-		frame_shift_ms = hparams.hop_size / hparams.sample_rate
-		for m in metadata:
-			metadata_groups[int(m[0])].append(m[1:])
-		for i in range(speaker_num):
-			hours = sum([int(x[2]) for x in metadata_groups[i]]) * frame_shift_ms / 3600
-			log(f'Loaded {hparams.anchor_dirs[i]} for {len(metadata_groups[i])} examples ({hours:.2f} hours)')
-
-	log('starting synthesis')
+	frame_shift_ms = hparams.hop_size / hparams.sample_rate
 	for speaker_id in range(speaker_num):
-		group = metadata_groups[speaker_id]
-		metadata = [group[i: i+hparams.tacotron_synthesis_batch_size] for i in range(0, len(group), hparams.tacotron_synthesis_batch_size)]
+		metadata_filename = os.path.join(args.input_dir, hparams.anchor_dirs[speaker_id], 'train.txt')
+		with open(metadata_filename, encoding='utf-8') as f:
+			metadata = [line.strip().split('|') for line in f]
+		hours = sum([int(x[2]) for x in metadata]) * frame_shift_ms / 3600
+		log(f'Loaded {hparams.anchor_dirs[speaker_id]} for {len(metadata)} examples ({hours:.2f} hours)')
+
+		log('starting synthesis')
+		metadata = [metadata[i: i+hparams.tacotron_synthesis_batch_size] for i in range(0, len(metadata), hparams.tacotron_synthesis_batch_size)]
 		mel_dir = os.path.join(args.input_dir, hparams.anchor_dirs[speaker_id], 'mels')
 		wav_dir = os.path.join(args.input_dir, hparams.anchor_dirs[speaker_id], 'audio')
 		for meta in tqdm(metadata):
