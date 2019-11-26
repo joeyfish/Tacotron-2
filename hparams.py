@@ -20,6 +20,7 @@ hparams = tf.contrib.training.HParams(
 	clip_mels_length = True, #For cases of OOM (Not really recommended, working on a workaround)
 	max_mel_frames = 900,  #Only relevant when clip_mels_length = True
 	max_text_length = 300,  #Only relevant when clip_mels_length = True
+	sentence_span = 20,  # Number of mel hops for each sentence interval
 
 	#Mel spectrogram
 	n_fft = 2048, #Extra window size is filled with 0 paddings to match this parameter
@@ -30,7 +31,7 @@ hparams = tf.contrib.training.HParams(
 	preemphasis = 0.97, # preemphasis coefficient
 
 	#Multi-speaker batch_size should be integer multiplies number of speakers.
-	anchor_dirs = ['xmly_fanfanli_22050', 'xmly_xiaoya_22050', 'xmly_jinhua_22050', 'xmly_qiuyixin_22050'],
+	anchor_dirs = ['tts_fanfanli_22050', 'tts_xiaoya_22050', 'tts_yangluzhuo_22050', 'tts_qiuyixin_22050'],
 
 	#M-AILABS (and other datasets) trim params
 	trim_fft_size = 512,
@@ -221,7 +222,7 @@ hparams = tf.contrib.training.HParams(
 	"rang4 wu2 shu4 ren2 dui4 xi1 zang4 qing2 gen1 shen1 zhong4 .",
 	"shi2 ge2 liang3 nian2 , you2 yuan2 ban1 ren2 ma3 da3 zao4 de jie3 mei4 pian1 ,",
 	"ji2 di4 , qiao1 ran2 shang4 xian4 !",
-	"mei3 yi4 zheng4 dou1 shi4 bi4 zhi3 , mei3 yi2 mu4 dou1 shi4 ren2 jian1 xian1 jing4 .",
+	"mei3 yi4 zheng1 dou1 shi4 bi4 zhi3 , mei3 yi2 mu4 dou1 shi4 ren2 jian1 xian1 jing4 .",
 	"zi4 ying3 pian1 bo1 chu1 zhi1 lai2 , hao3 ping2 ru2 chao2 ,",
 	"jiu4 lian2 yi2 xiang4 yi3 yan2 jin3 chu1 ming2 de dou4 ban4 ping2 fen1 ye3 shi4 hen3 gao1 .",
 	"zao3 zai4 er4 ling2 yi1 wu3 nian2 ,",

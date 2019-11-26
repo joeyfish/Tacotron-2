@@ -6,15 +6,23 @@ from scipy import signal
 from scipy.io import wavfile
 
 
+def dc_notch_filter(wav):
+	# code from speex
+	notch_radius = 0.982
+	den = notch_radius ** 2 + 0.7 * (1 - notch_radius) ** 2
+	b = np.array([1, -2, 1]) * notch_radius
+	a = np.array([1, -2 * notch_radius, den])
+	return signal.lfilter(b, a, wav)
+
 def load_wav(path, sr):
 	return librosa.core.load(path, sr=sr)[0]
 
 def save_wav(wav, path, hparams):
+	wav = dc_notch_filter(wav)
 	wav = wav / np.abs(wav).max() * 0.999
 	f1 = 0.5 * 32767 / max(0.01, np.max(np.abs(wav)))
 	f2 = np.sign(wav) * np.power(np.abs(wav), 0.95)
 	wav = f1 * f2
-	wav = signal.convolve(wav, signal.firwin(256, [hparams.fmin, hparams.fmax], pass_zero=False, fs=hparams.sample_rate))
 	#proposed by @dsmiller
 	wavfile.write(path, hparams.sample_rate, wav.astype(np.int16))
 
