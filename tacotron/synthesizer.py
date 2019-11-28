@@ -116,7 +116,7 @@ class Synthesizer:
 		target_lengths = self._get_output_lengths(stop_tokens)
 
 		#Take off the batch wise padding
-		padding = np.full((self._hparams.sentence_span, self._hparams.num_mels), self._target_pad)
+		padding = np.full((self._hparams.sentence_span, self._hparams.num_mels), self._target_pad).astype(np.float32)
 		mels = [np.concatenate([mel[:target_length, :], padding]) for mel, target_length in zip(mels, target_lengths)]
 		assert len(mels) == len(batch)
 
