@@ -1,4 +1,3 @@
-import numpy as np
 import tensorflow as tf
 
 # Default hyperparameters
@@ -23,12 +22,13 @@ hparams = tf.contrib.training.HParams(
 	sentence_span = 20,  # Number of mel hops for each sentence interval
 
 	#Mel spectrogram
-	n_fft = 2048, #Extra window size is filled with 0 paddings to match this parameter
-	hop_size = 275, #For 22050Hz, 275 ~= 12.5 ms
-	win_size = 1100, #For 22050Hz, 1100 ~= 50 ms (If None, win_size = n_fft)
+	n_fft = 1024, #Extra window size is filled with 0 paddings to match this parameter
+	hop_size = 256, #For 22050Hz, 256 ~= 11.5 ms
+	win_size = 1024, #For 22050Hz, 1024 ~= 46 ms (If None, win_size = n_fft)
 	sample_rate = 22050, #22050 Hz (corresponding to ljspeech dataset)
 	frame_shift_ms = None,
 	preemphasis = 0.97, # preemphasis coefficient
+	vocoder = 'wavernn', # Could be 'wavernn' or 'melgan'
 
 	#Multi-speaker batch_size should be integer multiplies number of speakers.
 	anchor_dirs = ['tts_fanfanli_22050', 'tts_xiaoya_22050', 'tts_yangluzhuo_22050', 'tts_qiuyixin_22050'],
@@ -43,7 +43,6 @@ hparams = tf.contrib.training.HParams(
 	allow_clipping_in_normalization = False, #Only relevant if mel_normalization = True
 	symmetric_mels = True, #Whether to scale the data to be symmetric around 0
 	max_abs_value = 4., #max absolute value of data. If symmetric, data will be [-max, max] else [0, max]
-	normalize_for_wavenet = True, #whether to rescale to [0, 1] for wavenet.
 
 	#Limits
 	min_level_db = -120,
@@ -108,7 +107,7 @@ hparams = tf.contrib.training.HParams(
 	tacotron_batch_size = 36, #number of training samples on each training steps
 	#Tacotron Batch synthesis supports ~16x the training batch size (no gradients during testing).
 	#Training Tacotron with unmasked paddings makes it aware of them, which makes synthesis times different from training. We thus recommend masking the encoder.
-	tacotron_synthesis_batch_size = 32, #DO NOT MAKE THIS BIGGER THAN 1 IF YOU DIDN'T TRAIN TACOTRON WITH "mask_encoder=True"!!
+	tacotron_synthesis_batch_size = 48, #DO NOT MAKE THIS BIGGER THAN 1 IF YOU DIDN'T TRAIN TACOTRON WITH "mask_encoder=True"!!
 	tacotron_test_size = 0.05, #% of data to keep as test data, if None, tacotron_test_batches must be not None. (5% is enough to have a good idea about overfit)
 	tacotron_test_batches = None, #number of test batches.
 
@@ -212,24 +211,24 @@ hparams = tf.contrib.training.HParams(
 	# "e2 luo2 si1 zhun3 bei4 tong2 mei3 guo2 jin4 xing2 dui4 hua4 .",
 	# "fan3 zheng4 bu2 shi4 mo4 si1 ke1 yao4 tui4 chu1 zhong1 dao3 tiao2 yue1 .",
 
-	"guan1 yu2 xi1 zang4 de chuan2 shuo1 you3 hen3 duo1 ,",
-	"li4 lai2 , dou1 shi4 chao2 sheng4 zhe3 de tian1 tang2 ,",
+	"guan1 yu2 xi1 zang4 de5 chuan2 shuo1 you2 hen3 duo1 ,",
+	"li4 lai2 , dou1 shi4 chao2 sheng4 zhe3 de5 tian1 tang2 ,",
 	"er2 zuo4 wei2 zhong1 guo2 xi1 nan2 bian1 chui2 zhong4 di4 ,",
-	"ye3 dou1 shi4 zhong1 guo2 ling3 tu3 bu4 ke3 fen1 ge1 de yi2 bu4 fen .",
+	"ye3 dou1 shi4 zhong1 guo2 ling3 tu3 bu4 ke3 fen1 ge1 de5 yi2 bu4 fen5 .",
 	"er4 ling2 yi1 wu3 nian2 , yang1 shi4 ceng2 jing1 bo1 chu1 guo4 yi2 bu4 gao1 fen1 ji4 lu4 pian4 ,",
 	"di4 san1 ji2",
-	"pian4 zhong1 , tian1 gao1 di4 kuo4 de feng1 jing3 ,",
+	"pian4 zhong1 , tian1 gao1 di4 kuo4 de5 feng1 jing3 ,",
 	"rang4 wu2 shu4 ren2 dui4 xi1 zang4 qing2 gen1 shen1 zhong4 .",
-	"shi2 ge2 liang3 nian2 , you2 yuan2 ban1 ren2 ma3 da3 zao4 de jie3 mei4 pian1 ,",
+	"shi2 ge2 liang3 nian2 , you2 yuan2 ban1 ren2 ma3 da3 zao4 de5 jie3 mei4 pian1 ,",
 	"ji2 di4 , qiao1 ran2 shang4 xian4 !",
 	"mei3 yi4 zheng1 dou1 shi4 bi4 zhi3 , mei3 yi2 mu4 dou1 shi4 ren2 jian1 xian1 jing4 .",
-	"zi4 ying3 pian1 bo1 chu1 zhi1 lai2 , hao3 ping2 ru2 chao2 ,",
-	"jiu4 lian2 yi2 xiang4 yi3 yan2 jin3 chu1 ming2 de dou4 ban4 ping2 fen1 ye3 shi4 hen3 gao1 .",
+	"zi4 ying3 pian4 bo1 chu1 zhi1 lai2 , hao3 ping2 ru2 chao2 ,",
+	"jiu4 lian2 yi2 xiang4 yi3 yan2 jin3 chu1 ming2 de5 dou4 ban4 ping2 fen5 ye3 shi4 hen3 gao1 .",
 	"zao3 zai4 er4 ling2 yi1 wu3 nian2 ,",
-	"ta1 de di4 yi1 ji4 di4 san1 ji2 jiu4 na2 dao4 le dou4 ban4 jiu2 dian3 er4 fen1 .",
-	"er2 rang4 ta1 yi2 xia4 na2 dao4 jiu2 dian3 wu3 fen1 de yuan2 yin1 shi4 yin1 wei4, ",
-	"ta1 zhan3 shi4 le zai4 na4 pian4 jue2 mei3 yu3 pin2 ji2 bing4 cun2 de jing4 tu3 shang4 ,",
-	"pu3 tong1 ren2 de zhen1 shi2 sheng1 huo2 shi4 shen2 me yang4 zi .",
+	"ta1 de5 di4 yi1 ji4 di4 san1 ji2 jiu4 na2 dao4 le5 dou4 ban4 jiu2 dian3 er4 fen1 .",
+	"er2 rang4 ta1 yi2 xia4 na2 dao4 jiu2 dian3 wu3 fen1 de5 yuan2 yin1 shi4 yin1 wei4 ,",
+	"ta1 zhan3 shi4 le5 zai4 na4 pian4 jue2 mei3 yu3 pin2 ji2 bing4 cun2 de5 jing4 tu3 shang4 ,",
+	"pu3 tong1 ren2 de5 zhen1 shi2 sheng1 huo2 shi4 shen2 me5 yang4 zi5 .",
 
 	# "bai2 jia1 xuan1 hou4 lai2 yin2 yi3 hao2 zhuang4 de shi4 yi4 sheng1 li3 qu3 guo4 qi1 fang2 nv3 ren2 .",
 	# "qu3 tou2 fang2 xi2 fu4 shi2 ta1 gang1 gang1 guo4 shi2 liu4 sui4 sheng1 ri4 .",

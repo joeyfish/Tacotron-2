@@ -1,8 +1,10 @@
-import glob, os
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
-import numpy as np
 from datasets import audio
+import glob
+import librosa
+import numpy as np
+import os
 
 
 def build_from_path(hparams, input_dir, wav_dir, mel_dir, n_jobs=12, tqdm=lambda x: x):
@@ -59,7 +61,7 @@ def _process_utterance(wav_dir, mel_dir, basename, wav_file, text, hparams):
 	"""
 	try:
 		# Load the audio as numpy array
-		wav = audio.load_wav(wav_file, sr=hparams.sample_rate)
+		wav, sr = audio.load_wav(wav_file, sr=hparams.sample_rate)
 	except FileNotFoundError: #catch missing wav exception
 		print(f'file {wav_file} present in csv metadata is not present in wav folder. skipping!')
 		return None
@@ -72,8 +74,7 @@ def _process_utterance(wav_dir, mel_dir, basename, wav_file, text, hparams):
 	if hparams.trim_silence:
 		wav = audio.trim_silence(wav, hparams)
 
-	#[-1, 1]
-	out = encode_mu_law(wav, mu=512)
+	out = wav if hparams.vocoder == 'melgan' else audio.encode_mu_law(wav, mu=512)
 
 	# Compute the mel scale spectrogram from the wav
 	mel_spectrogram = audio.melspectrogram(wav, hparams).astype(np.float32)
@@ -93,33 +94,11 @@ def _process_utterance(wav_dir, mel_dir, basename, wav_file, text, hparams):
 
 	# Write the spectrogram and audio to disk
 	filename = f'{basename}.npy'
-	np.save(os.path.join(wav_dir, filename), out.astype(np.int16), allow_pickle=False)
+	if hparams.vocoder == 'melgan':
+		librosa.output.write_wav(os.path.join(wav_dir, basename + '.wav'), out, sr)
+	else:
+		np.save(os.path.join(wav_dir, filename), out.astype(np.int16), allow_pickle=False)
 	np.save(os.path.join(mel_dir, filename), mel_spectrogram, allow_pickle=False)
 
 	# Return a tuple describing this training example
 	return (filename, time_steps, mel_frames, text)
-
-
-def label_2_float(x, bits) :
-	return 2 * x / (2**bits - 1.) - 1.
-
-
-def float_2_label(x, bits) :
-	assert abs(x).max() <= 1.0
-	x = (x + 1.) * (2**bits - 1) / 2
-	return x.clip(0, 2**bits - 1)
-
-
-def encode_mu_law(x, mu) :
-	mu = mu - 1
-	fx = np.sign(x) * np.log(1 + mu * np.abs(x)) / np.log(1 + mu)
-	return np.floor((fx + 1) / 2 * mu + 0.5)
-
-
-def decode_mu_law(y, mu, from_labels=False) :
-	# TODO : get rid of log2 - makes no sense
-	import math
-	if from_labels : y = label_2_float(y, math.log2(mu))
-	mu = mu - 1
-	x = np.sign(y) / mu * ((1 + mu) ** np.abs(y) - 1)
-	return x
