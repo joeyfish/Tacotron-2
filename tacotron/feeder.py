@@ -39,7 +39,10 @@ class Feeder:
 		self._train_offset = np.zeros(self.speaker_num, dtype=np.int32)
 		self._test_offset = np.zeros(self.speaker_num, dtype=np.int32)
 		self._metadata = []
-		self._mel_dirs = [os.path.join(metadata_dir, hparams.anchor_dirs[i], 'mels') for i in range(self.speaker_num)]
+		if self._hparams.vocoder != 'melgan':
+			self._mel_dirs = [os.path.join(metadata_dir, hparams.anchor_dirs[i], 'mels') for i in range(self.speaker_num)]
+		else:
+			self._mel_dirs = [os.path.join(metadata_dir, hparams.anchor_dirs[i]) for i in range(self.speaker_num)]
 
 		# Load metadata
 		frame_shift_ms = hparams.hop_size / hparams.sample_rate
