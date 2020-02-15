@@ -103,10 +103,11 @@ def run_synthesis(args, checkpoint_path, output_dir, hparams):
 		hours = sum([int(x[2]) for x in metadata]) * frame_shift_ms / 3600
 		log(f'Loaded {hparams.anchor_dirs[speaker_id]} for {len(metadata)} examples ({hours:.2f} hours)')
 
-		log('starting synthesis')
 		metadata = [metadata[i: i+hparams.tacotron_synthesis_batch_size] for i in range(0, len(metadata), hparams.tacotron_synthesis_batch_size)]
-		mel_dir = os.path.join(args.input_dir, hparams.anchor_dirs[speaker_id], 'mels')
-		wav_dir = os.path.join(args.input_dir, hparams.anchor_dirs[speaker_id], 'audio')
+		if hparams.vocoder != 'melgan':
+			mel_dir = os.path.join(args.input_dir, hparams.anchor_dirs[speaker_id], 'mels')
+		else:
+			mel_dir = os.path.join(args.input_dir, hparams.anchor_dirs[speaker_id])
 		for meta in tqdm(metadata):
 			texts = [m[3] for m in meta]
 			mel_filenames = [os.path.join(mel_dir, m[0]) for m in meta]

@@ -233,9 +233,7 @@ class Tacotron():
 
 			# Add dependency on UPDATE_OPS; otherwise batchnorm won't work correctly. See:
 			# https://github.com/tensorflow/tensorflow/issues/1122
-			with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
-				self.optimize = optimizer.apply_gradients(zip(clipped_gradients, variables),
-					global_step=global_step)
+			self.optimize = optimizer.apply_gradients(zip(clipped_gradients, variables), global_step=global_step)
 
 	def _learning_rate_decay(self, init_lr, global_step):
 		#################################################################
