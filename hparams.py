@@ -31,7 +31,7 @@ hparams = tf.contrib.training.HParams(
 	vocoder = 'wavernn', # Could be 'wavernn' or 'melgan'
 
 	#Multi-speaker batch_size should be integer multiplies number of speakers.
-	anchor_dirs = ['tts_fanfanli_22050', 'tts_xiaoya_22050', 'tts_yangluzhuo_22050', 'tts_qiuyixin_22050'],
+	anchor_dirs = ['tts_fanfanli_22050', 'tts_xiaoya_22050', 'tts_yangluzhuo_22050', 'tts_yuanzhonglu_22050'],
 
 	#M-AILABS (and other datasets) trim params
 	trim_fft_size = 512,
@@ -104,7 +104,7 @@ hparams = tf.contrib.training.HParams(
 	tacotron_swap_with_cpu = False, #Whether to use cpu as support to gpu for decoder computation (Not recommended: may cause major slowdowns! Only use when critical!)
 
 	#train/test split ratios, mini-batches sizes
-	tacotron_batch_size = 36, #number of training samples on each training steps
+	tacotron_batch_size = 40, #number of training samples on each training steps
 	#Tacotron Batch synthesis supports ~16x the training batch size (no gradients during testing).
 	#Training Tacotron with unmasked paddings makes it aware of them, which makes synthesis times different from training. We thus recommend masking the encoder.
 	tacotron_synthesis_batch_size = 48, #DO NOT MAKE THIS BIGGER THAN 1 IF YOU DIDN'T TRAIN TACOTRON WITH "mask_encoder=True"!!
