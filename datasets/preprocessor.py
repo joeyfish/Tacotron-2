@@ -94,10 +94,8 @@ def _process_utterance(wav_dir, mel_dir, basename, wav_file, text, hparams):
 
 	# Write the spectrogram and audio to disk
 	filename = f'{basename}.npy'
-	if hparams.vocoder == 'melgan':
-		librosa.output.write_wav(os.path.join(wav_dir, basename + '.wav'), out, sr)
-	else:
-		np.save(os.path.join(wav_dir, filename), out.astype(np.int16), allow_pickle=False)
+	if hparams.vocoder == 'wavernn': out = out.astype(np.int16)
+	np.save(os.path.join(wav_dir, filename), out, allow_pickle=False)
 	np.save(os.path.join(mel_dir, filename), mel_spectrogram, allow_pickle=False)
 
 	# Return a tuple describing this training example
