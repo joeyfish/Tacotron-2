@@ -35,7 +35,7 @@ class Synthesizer:
 		self._pad = 0
 		#explicitely setting the padding to a value that doesn't originally exist in the spectogram
 		#to avoid any possible conflicts, without affecting the output range of the model too much
-		self._target_pad = -(hparams.max_abs_value + .1) if hparams.symmetric_mels else -0.1
+		self._target_pad = -(hparams.max_abs_value + 1) if hparams.symmetric_mels else -1
 
 		self.checkpoint_path = checkpoint_path
 		log('Loading checkpoint: %s' % checkpoint_path)
