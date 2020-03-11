@@ -94,17 +94,16 @@ def run_synthesis(args, checkpoint_path, output_dir, hparams):
 	synth.load(checkpoint_path, hparams, gta=GTA)
 	synth.session_open()
 
-	speaker_num = len(hparams.anchor_dirs)
 	frame_shift_ms = hparams.hop_size / hparams.sample_rate
-	for speaker_id in range(speaker_num):
-		metadata_filename = os.path.join(args.input_dir, hparams.anchor_dirs[speaker_id], 'train.txt')
+	for speaker_id, anchor_dir in enumerate(hparams.anchor_dirs):
+		metadata_filename = os.path.join(args.input_dir, anchor_dir, 'train.txt')
 		with open(metadata_filename, encoding='utf-8') as f:
 			metadata = [line.strip().split('|') for line in f]
 		hours = sum([int(x[2]) for x in metadata]) * frame_shift_ms / 3600
-		log(f'Loaded {hparams.anchor_dirs[speaker_id]} for {len(metadata)} examples ({hours:.2f} hours)')
+		log(f'Loaded {anchor_dir} for {len(metadata)} examples ({hours:.2f} hours)')
 
 		metadata = [metadata[i: i+hparams.tacotron_synthesis_batch_size] for i in range(0, len(metadata), hparams.tacotron_synthesis_batch_size)]
-		mel_dir = os.path.join(args.input_dir, hparams.anchor_dirs[speaker_id], 'mels')
+		mel_dir = os.path.join(args.input_dir, anchor_dir, 'mels')
 		for meta in tqdm(metadata):
 			texts = [m[3] for m in meta]
 			mel_filenames = [os.path.join(mel_dir, m[0]) for m in meta]

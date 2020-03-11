@@ -39,16 +39,16 @@ class Feeder:
 		self._train_offset = np.zeros(self.speaker_num, dtype=np.int32)
 		self._test_offset = np.zeros(self.speaker_num, dtype=np.int32)
 		self._metadata = []
-		self._mel_dirs = [os.path.join(metadata_dir, hparams.anchor_dirs[i], 'mels') for i in range(self.speaker_num)]
+		self._mel_dirs = [os.path.join(metadata_dir, anchor_dir, 'mels') for i, anchor_dir in enumerate(hparams.anchor_dirs)]
 
 		# Load metadata
 		frame_shift_ms = hparams.hop_size / hparams.sample_rate
-		for i in range(self.speaker_num):
-			with open(os.path.join(metadata_dir, hparams.anchor_dirs[i], 'train.txt'), encoding='utf-8') as f:
+		for i, anchor_dir in enumerate(hparams.anchor_dirs):
+			with open(os.path.join(metadata_dir, anchor_dir, 'train.txt'), encoding='utf-8') as f:
 				metadata = [line.strip().split('|') for line in f]
 				self._metadata.append(metadata)
 				hours = sum([int(x[2]) for x in metadata]) * frame_shift_ms / 3600
-				log(f'Loaded {hparams.anchor_dirs[i]} for {len(metadata)} examples ({hours:.2f} hours)')
+				log(f'Loaded {anchor_dir} for {len(metadata)} examples ({hours:.2f} hours)')
 
 		# training and test set indices
 		indices = [np.arange(len(self._metadata[i])) for i in range(self.speaker_num)]
