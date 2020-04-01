@@ -99,7 +99,7 @@ class Synthesizer:
 
 		return saved_mels_paths
 
-	def eval(self, batch, speaker_id):
+	def eval(self, batch, speaker_id=0):
 		hparams = self._hparams
 		cleaner_names = [x.strip() for x in hparams.cleaners.split(',')]
 		seqs = [np.asarray(text_to_sequence(text, speaker_id, cleaner_names)) for text in batch]
