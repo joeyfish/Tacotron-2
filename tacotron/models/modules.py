@@ -10,6 +10,83 @@ def GuidedAttention(N, T, g=0.2):
         return W
 
 
+class HighwayNet:
+	def __init__(self, units, name=None):
+		self.units = units
+		self.scope = 'HighwayNet' if name is None else name
+
+		self.H_layer = tf.layers.Dense(units=self.units, activation=tf.nn.relu, name='H')
+		self.T_layer = tf.layers.Dense(units=self.units, activation=tf.nn.sigmoid, name='T', bias_initializer=tf.constant_initializer(-1.))
+
+	def __call__(self, inputs):
+		with tf.variable_scope(self.scope):
+			H = self.H_layer(inputs)
+			T = self.T_layer(inputs)
+			return H * T + inputs * (1. - T)
+
+
+class CBHG:
+	def __init__(self, K, conv_channels, pool_size, projections, projection_kernel_size, n_highwaynet_layers, highway_units, rnn_units, bnorm, is_training, name=None):
+		self.K = K
+		self.conv_channels = conv_channels
+		self.pool_size = pool_size
+
+		self.projections = projections
+		self.projection_kernel_size = projection_kernel_size
+		self.bnorm = bnorm
+
+		self.is_training = is_training
+		self.scope = 'CBHG' if name is None else name
+
+		self.highway_units = highway_units
+		self.highwaynet_layers = [HighwayNet(highway_units, name='{}_highwaynet_{}'.format(self.scope, i+1)) for i in range(n_highwaynet_layers)]
+		self._fw_cell = tf.nn.rnn_cell.GRUCell(rnn_units, name='{}_forward_RNN'.format(self.scope))
+		self._bw_cell = tf.nn.rnn_cell.GRUCell(rnn_units, name='{}_backward_RNN'.format(self.scope))
+
+	def __call__(self, inputs, input_lengths):
+		with tf.variable_scope(self.scope):
+			with tf.variable_scope('conv_bank'):
+				#Convolution bank: concatenate on the last axis to stack channels from all convolutions
+				#The convolution bank uses multiple different kernel sizes to have many insights of the input sequence
+				#This makes one of the strengths of the CBHG block on sequences.
+				conv_outputs = tf.concat(
+					[conv1d(inputs, k, self.conv_channels, tf.nn.relu, self.is_training, self.bnorm, 'conv1d_{}'.format(k)) for k in range(1, self.K+1)],
+					axis=-1
+					)
+
+			#Maxpooling (dimension reduction, Using max instead of average helps finding "Edges" in mels)
+			maxpool_output = tf.layers.max_pooling1d(
+				conv_outputs,
+				pool_size=self.pool_size,
+				strides=1,
+				padding='same')
+
+			#Two projection layers
+			proj1_output = conv1d(maxpool_output, self.projection_kernel_size, self.projections[0], tf.nn.relu, self.is_training, self.bnorm, 'proj1')
+			proj2_output = conv1d(proj1_output, self.projection_kernel_size, self.projections[1], lambda _: _, self.is_training, self.bnorm, 'proj2')
+
+			#Residual connection
+			highway_input = proj2_output + inputs
+
+			#Additional projection in case of dimension mismatch (for HighwayNet "residual" connection)
+			if highway_input.shape[2] != self.highway_units:
+				highway_input = tf.layers.dense(highway_input, self.highway_units)
+
+			#4-layer HighwayNet
+			for highwaynet in self.highwaynet_layers:
+				highway_input = highwaynet(highway_input)
+			rnn_input = highway_input
+
+			#Bidirectional RNN
+			outputs, states = tf.nn.bidirectional_dynamic_rnn(
+				self._fw_cell,
+				self._bw_cell,
+				rnn_input,
+				sequence_length=input_lengths,
+				dtype=tf.float32)
+			return tf.concat(outputs, axis=2) #Concat forward and backward outputs
+
+
 class ZoneoutLSTMCell(tf.nn.rnn_cell.RNNCell):
 	'''Wrapper for tf LSTM to create Zoneout LSTM Cell
 
@@ -102,7 +179,7 @@ class EncoderConvolutions:
 			x = inputs
 			for i in range(self.enc_conv_num_layers):
 				x = conv1d(x, self.kernel_size, self.channels, self.activation,
-					self.is_training, self.bnorm, f'conv_layer_{i+1}_' + self.scope)
+					self.is_training, self.bnorm, 'conv_layer_{}_'.format(i + 1)+self.scope)
 		return x
 
 
@@ -175,11 +252,11 @@ class Prenet:
 		with tf.variable_scope(self.scope):
 			for i, size in enumerate(self.layers_sizes):
 				dense = tf.layers.dense(x, units=size, activation=self.activation,
-					name=f'dense_{i+1}')
+					name='dense_{}'.format(i + 1))
 				#The paper discussed introducing diversity in generation at inference time
 				#by using a dropout of 0.5 only in prenet layers (in both training and inference).
 				x = tf.layers.dropout(dense, rate=self.drop_rate, training=True,
-					name=f'dropout_{i+1}' + self.scope)
+					name='dropout_{}'.format(i + 1) + self.scope)
 		return x
 
 
@@ -206,7 +283,7 @@ class DecoderRNN:
 		self.rnn_layers = [ZoneoutLSTMCell(size, is_training,
 			zoneout_factor_cell=zoneout,
 			zoneout_factor_output=zoneout,
-			name=f'decoder_LSTM_{i+1}') for i in range(layers)]
+			name='decoder_LSTM_{}'.format(i+1)) for i in range(layers)]
 
 		self._cell = tf.contrib.rnn.MultiRNNCell(self.rnn_layers, state_is_tuple=True)
 
@@ -231,14 +308,14 @@ class FrameProjection:
 		self.activation = activation
 
 		self.scope = 'Linear_projection' if scope is None else scope
-		self.dense = tf.layers.Dense(units=shape, activation=activation, name=f'projection_{self.scope}')
+		self.dense = tf.layers.Dense(units=shape, activation=activation, name='projection_{}'.format(self.scope))
 
 	def __call__(self, inputs):
 		with tf.variable_scope(self.scope):
 			#If activation==None, this returns a simple Linear projection
 			#else the projection will be passed through an activation function
 			# output = tf.layers.dense(inputs, units=self.shape, activation=self.activation,
-			# 	name=f'projection_{self.scope}')
+			# 	name='projection_{}'.format(self.scope))
 			output = self.dense(inputs)
 
 			return output
@@ -265,7 +342,8 @@ class StopProjection:
 
 	def __call__(self, inputs):
 		with tf.variable_scope(self.scope):
-			output = tf.layers.dense(inputs, units=self.shape, activation=None, name=f'projection_{self.scope}')
+			output = tf.layers.dense(inputs, units=self.shape,
+				activation=None, name='projection_{}'.format(self.scope))
 
 			#During training, don't use activation as it is integrated inside the sigmoid_cross_entropy loss function
 			if self.is_training:
@@ -301,9 +379,9 @@ class Postnet:
 			x = inputs
 			for i in range(self.postnet_num_layers - 1):
 				x = conv1d(x, self.kernel_size, self.channels, self.activation,
-					self.is_training, self.bnorm, f'conv_layer_{i+1}_' + self.scope)
+					self.is_training, self.bnorm, 'conv_layer_{}_'.format(i + 1)+self.scope)
 			x = conv1d(x, self.kernel_size, self.channels, lambda _: _, self.is_training, self.bnorm,
-				'conv_layer_5_' + self.scope)
+				'conv_layer_{}_'.format(5)+self.scope)
 		return x
 
 
@@ -382,3 +460,33 @@ def MaskedSigmoidCrossEntropy(targets, outputs, targets_lengths, hparams, mask=N
 		masked_loss = losses * mask
 
 	return tf.reduce_sum(masked_loss) / tf.count_nonzero(masked_loss, dtype=tf.float32)
+
+def MaskedLinearLoss(targets, outputs, targets_lengths, hparams, mask=None):
+	'''Computes a masked MAE loss with priority to low frequencies
+	'''
+
+	#[batch_size, time_dimension, 1]
+	#example:
+	#sequence_mask([1, 3, 2], 5) = [[[1., 0., 0., 0., 0.]],
+	#							    [[1., 1., 1., 0., 0.]],
+	#							    [[1., 1., 0., 0., 0.]]]
+	#Note the maxlen argument that ensures mask shape is compatible with r>1
+	#This will by default mask the extra paddings caused by r>1
+	if mask is None:
+		mask = sequence_mask(targets_lengths, hparams.outputs_per_step, True)
+
+	#[batch_size, time_dimension, channel_dimension(freq)]
+	ones = tf.ones(shape=[tf.shape(mask)[0], tf.shape(mask)[1], tf.shape(targets)[-1]], dtype=tf.float32)
+	mask_ = mask * ones
+
+	l1 = tf.abs(targets - outputs)
+	n_priority_freq = int(2000 / (hparams.sample_rate * 0.5) * hparams.num_freq)
+
+	with tf.control_dependencies([tf.assert_equal(tf.shape(targets), tf.shape(mask_))]):
+		masked_l1 = l1 * mask_
+		masked_l1_low = masked_l1[:,:,0:n_priority_freq]
+
+	mean_l1 = tf.reduce_sum(masked_l1) / tf.reduce_sum(mask_)
+	mean_l1_low = tf.reduce_sum(masked_l1_low) / tf.reduce_sum(mask_)
+
+	return 0.5 * mean_l1 + 0.5 * mean_l1_low

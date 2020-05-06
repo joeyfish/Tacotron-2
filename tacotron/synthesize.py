@@ -1,5 +1,5 @@
 import argparse
-import os
+import os,sys
 import re
 import time
 import numpy as np
@@ -21,7 +21,6 @@ def run_live(args, checkpoint_path, hparams):
 	log(hparams_debug_string())
 	synth = Synthesizer()
 	synth.load(checkpoint_path, hparams)
-	synth.session_open()
 
 	#Generate fast greeting message
 	greetings = 'Hello, Welcome to the Live testing tool. Please type a message and I will try to read it!'
@@ -40,8 +39,6 @@ def run_live(args, checkpoint_path, hparams):
 			generate_fast(synth, leave)
 			sleep(2)
 			break
-	synth.session_close()
-
 
 def run_eval(args, checkpoint_path, output_dir, hparams, sentences):
 	eval_dir = os.path.join(output_dir, 'eval')
@@ -59,23 +56,28 @@ def run_eval(args, checkpoint_path, output_dir, hparams, sentences):
 	log(hparams_debug_string())
 	synth = Synthesizer()
 	synth.load(checkpoint_path, hparams)
-	synth.session_open()
-
-	sentences = list(map(lambda s: s.strip(), sentences))
-	delta_size = hparams.tacotron_synthesis_batch_size if hparams.tacotron_synthesis_batch_size < len(sentences) else len(sentences)
-	batch_sentences = [sentences[i: i+hparams.tacotron_synthesis_batch_size] for i in range(0, len(sentences), delta_size)]
-	start = time.time()
-	for i, batch in enumerate(tqdm(batch_sentences)):
-		mel_filename = os.path.join(eval_dir, f'{i:03d}.npy')
-		mel = synth.eval(batch, args.speaker_id)
-		np.save(mel_filename, mel.T, allow_pickle=False)
-		wav = audio.inv_mel_spectrogram(mel.T, hparams)
-		audio.save_wav(wav, os.path.join(eval_dir, f'{i:03d}.wav'), hparams)
-	end = time.time() - start
-	log(f'Generated total batch of {delta_size} in {end:.3f} sec')
-	synth.session_close()
 
 
+
+	#Set inputs batch wise
+	sentences = [sentences[i: i+hparams.tacotron_synthesis_batch_size] for i in range(0, len(sentences), hparams.tacotron_synthesis_batch_size)]
+
+	log('Starting Synthesis')
+	with open(os.path.join(eval_dir, 'map.txt'), 'w') as file:
+		for i, texts in enumerate(tqdm(sentences)): #batch_sentences
+			start = time.time()
+			basenames = ['batch_{}_sentence_{}'.format(i, j) for j in range(len(texts))]
+			#print(f"\033[1;40;35m*  [{sys._getframe().f_lineno}] === DEBUG here texts={texts}  ====\033[0m")	
+			mel_filenames, speaker_ids = synth.synthesize(texts, basenames, eval_dir, log_dir, None)
+
+			for elems in zip(texts, mel_filenames, speaker_ids):
+				file.write('|'.join([str(x) for x in elems]) + '\n')
+	log('synthesized mel spectrograms at {}'.format(eval_dir))
+	if not args.eval_seperate:
+		#TODO: merge all wave here, include liner and mels
+		a = 1
+	return eval_dir
+	
 def run_synthesis(args, checkpoint_path, output_dir, hparams):
 	GTA = (args.GTA == 'True')
 	if GTA:
@@ -89,42 +91,47 @@ def run_synthesis(args, checkpoint_path, output_dir, hparams):
 		#Create output path if it doesn't exist
 		os.makedirs(synth_dir, exist_ok=True)
 
+
+	metadata_filename = os.path.join(args.input_dir, 'train.txt')
 	log(hparams_debug_string())
 	synth = Synthesizer()
 	synth.load(checkpoint_path, hparams, gta=GTA)
-	synth.session_open()
+	with open(metadata_filename, encoding='utf-8') as f:
+		metadata = [line.strip().split('|') for line in f]
+		frame_shift_ms = hparams.hop_size / hparams.sample_rate
+		hours = sum([int(x[4]) for x in metadata]) * frame_shift_ms / (3600)
+		log('Loaded metadata for {} examples ({:.2f} hours)'.format(len(metadata), hours))
 
-	frame_shift_ms = hparams.hop_size / hparams.sample_rate
-	for speaker_id, anchor_dir in enumerate(hparams.anchor_dirs):
-		metadata_filename = os.path.join(args.input_dir, anchor_dir, 'train.txt')
-		with open(metadata_filename, encoding='utf-8') as f:
-			metadata = [line.strip().split('|') for line in f]
-		hours = sum([int(x[2]) for x in metadata]) * frame_shift_ms / 3600
-		log(f'Loaded {anchor_dir} for {len(metadata)} examples ({hours:.2f} hours)')
+	metadata = [metadata[i: i+hparams.tacotron_synthesis_batch_size] for i in range(0, len(metadata), hparams.tacotron_synthesis_batch_size)]
 
-		metadata = [metadata[i: i+hparams.tacotron_synthesis_batch_size] for i in range(0, len(metadata), hparams.tacotron_synthesis_batch_size)]
-		mel_dir = os.path.join(args.input_dir, anchor_dir, 'mels')
-		for meta in tqdm(metadata):
-			texts = [m[3] for m in meta]
-			mel_filenames = [os.path.join(mel_dir, m[0]) for m in meta]
+	log('starting synthesis')
+	mel_dir = os.path.join(args.input_dir, 'mels')
+	wav_dir = os.path.join(args.input_dir, 'audio')
+	with open(os.path.join(synth_dir, 'map.txt'), 'w') as file:
+		for i, meta in enumerate(tqdm(metadata)):
+			texts = [m[5] for m in meta]
+			mel_filenames = [os.path.join(mel_dir, m[1]) for m in meta]
+			wav_filenames = [os.path.join(wav_dir, m[0]) for m in meta]
 			basenames = [os.path.basename(m).replace('.npy', '').replace('mel-', '') for m in mel_filenames]
-			synth.synthesize(texts, basenames, synth_dir, None, mel_filenames, speaker_id)
-	log(f'synthesized mel spectrograms at {synth_dir}')
-	synth.session_close()
+			mel_output_filenames, speaker_ids = synth.synthesize(texts, basenames, synth_dir, None, mel_filenames)
 
+			for elems in zip(wav_filenames, mel_filenames, mel_output_filenames, speaker_ids, texts):
+				file.write('|'.join([str(x) for x in elems]) + '\n')
+	log('synthesized mel spectrograms at {}'.format(synth_dir))
+	return os.path.join(synth_dir, 'map.txt')
 
 def tacotron_synthesize(args, hparams, checkpoint, sentences=None):
 	output_dir = 'tacotron_' + args.output_dir
 
 	try:
 		checkpoint_path = tf.train.get_checkpoint_state(checkpoint).model_checkpoint_path
-		log(f'loaded model at {checkpoint_path}')
+		log('loaded model at {}'.format(checkpoint_path))
 	except:
-		raise RuntimeError(f'Failed to load checkpoint at {checkpoint}')
+		raise RuntimeError('Failed to load checkpoint at {}'.format(checkpoint))
 
 	if args.mode == 'eval':
-		run_eval(args, checkpoint_path, output_dir, hparams, sentences)
+		return run_eval(args, checkpoint_path, output_dir, hparams, sentences)
 	elif args.mode == 'synthesis':
-		run_synthesis(args, checkpoint_path, output_dir, hparams)
+		return run_synthesis(args, checkpoint_path, output_dir, hparams)
 	else:
 		run_live(args, checkpoint_path, hparams)

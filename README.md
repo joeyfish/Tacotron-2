@@ -5,6 +5,24 @@ Tensorflow implementation of DeepMind's Tacotron-2. A deep neural network archit
 # Repository Structure:
 	Tacotron-2
 	├── datasets
+	├── corpus
+	│   └── BZNSYP
+	│   │ 	├── PhoneLabeling
+	│   │ 	├── ProsodyLabeling/000001-010000.txt
+	│ 	│ 	└── Wave
+	│   └── data_thchs30
+	│   │ 	├── data
+	│   │ 	├── dev
+	│   │ 	├── lm_phone
+	│   │ 	├── ...
+	│   │ 	├── test
+	│ 	│ 	└── train
+	│   └── data_aishell.tgz
+	│   └── resource_aishell.tgz
+	│   └── mycorpus
+	│   │ 	├── PhoneLabeling
+	│   │ 	├── ProsodyLabeling/000001-010000.txt
+	│ 	│ 	└── Wave
 	├── en_UK		(0)
 	│   └── by_book
 	│       └── female
@@ -53,8 +71,55 @@ Tensorflow implementation of DeepMind's Tacotron-2. A deep neural network archit
 
 The previous tree shows the current state of the repository (separate training, one step at a time).
 
-- Step **(0)**: Get your dataset, here I have set the examples of **Ljspeech**, **en_US** and **en_UK** (from **M-AILABS**).
+- Step **(0)**: Get your dataset, here I have set the examples of THCHS30/BIAOBEI/my self corpus.
 - Step **(1)**: Preprocess your data. This will give you the **training_data** folder.
+
+    =================== contact QQ: 172145472 email joeytang3@163.com =============== 
+
+    all for THCHS-30
+    
+    python3 ./preprocess.py --dataset corpus --subdataset THCHS-30 --speaker_thchs30 a
+    
+    female for THCHS-30
+    
+    python3 ./preprocess.py --dataset corpus --subdataset THCHS-30 --speaker_thchs30 f
+    
+    male for THCHS-30
+    
+    python3 ./preprocess.py --dataset corpus --subdataset THCHS-30 --speaker_thchs30 m
+    
+    for BIAOBEI
+    
+    python3 ./preprocess.py --dataset corpus --subdataset BIAOBEI
+    
+    for mycorpus
+    
+    python3 ./preprocess.py --dataset corpus --subdataset mycorpus
+    
+    for AISHELL,  to save time, put data_aishell.tgz and resource_aishell.tgz under corpus folder
+    
+    ./download_data_aishell.sh 
+    
+    male(min files, 5000): python3 ./preprocess.py --dataset corpus --subdataset AISHELL --speaker_aishell m12
+    
+    or
+    
+    female(min files, 5000): python3 ./preprocess.py --dataset corpus --subdataset AISHELL --speaker_aishell f12
+    
+    =================== Preprocess your data by script (test it on ubuntu 16.04) =============== 
+    
+    1) biaobei: ./pre_biaobei.sh
+    
+    2) mycorpus: ./pre_mycorpus.sh
+    
+    3) thchs30 male:  ./pre_thchs30_m.sh
+    
+    4) thchs30 female:  ./pre_thchs30_f.sh
+    
+    5) aishell male: ./pre_aishell.sh
+
+    =================== =========================================== =============== 
+
 - Step **(2)**: Train your Tacotron model. Yields the **logs-Tacotron** folder.
 - Step **(3)**: Synthesize/Evaluate the Tacotron model. Gives the **tacotron_output** folder.
 - Step **(4)**: Train your Wavenet model. Yield the **logs-Wavenet** folder.

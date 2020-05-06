@@ -1,24 +1,38 @@
-import os
+import os,sys
 import threading
 import time
 import traceback
+
 import numpy as np
 import tensorflow as tf
 from infolog import log
 from sklearn.model_selection import train_test_split
 from tacotron.utils.text import text_to_sequence
 
-_batches_per_group = 32 #must be integer multiplies of speaker_num
+_batches_per_group = 32
 
 class Feeder:
 	"""
-	Feeds batches of data into queue on a background thread.
+		Feeds batches of data into queue on a background thread.
 	"""
-	def __init__(self, coordinator, metadata_dir, hparams):
+
+	def __init__(self, coordinator, metadata_filename, hparams):
+		#print(f"\033[1;40;35m*  [{sys._getframe().f_lineno}] === DEBUG here metadata_filename={metadata_filename}  ====\033[0m")
 		super(Feeder, self).__init__()
 		self._coord = coordinator
 		self._hparams = hparams
 		self._cleaner_names = [x.strip() for x in hparams.cleaners.split(',')]
+		self._train_offset = 0
+		self._test_offset = 0
+
+		# Load metadata
+		self._mel_dir = os.path.join(os.path.dirname(metadata_filename), 'mels')
+		self._linear_dir = os.path.join(os.path.dirname(metadata_filename), 'linear')
+		with open(metadata_filename, encoding='utf-8') as f:
+			self._metadata = [line.strip().split('|') for line in f]
+			frame_shift_ms = hparams.hop_size / hparams.sample_rate
+			hours = sum([int(x[4]) for x in self._metadata]) * frame_shift_ms / (3600)
+			log('Loaded metadata for {} examples ({:.2f} hours)'.format(len(self._metadata), hours))
 
 		#Train test split
 		if hparams.tacotron_test_size is None:
@@ -26,52 +40,34 @@ class Feeder:
 
 		test_size = (hparams.tacotron_test_size if hparams.tacotron_test_size is not None
 			else hparams.tacotron_test_batches * hparams.tacotron_batch_size)
+		indices = np.arange(len(self._metadata))
+		train_indices, test_indices = train_test_split(indices,
+			test_size=test_size, random_state=hparams.tacotron_data_random_state)
+
+		#Make sure test_indices is a multiple of batch_size else round up
+		len_test_indices = self._round_down(len(test_indices), hparams.tacotron_batch_size)
+		extra_test = test_indices[len_test_indices:]
+		test_indices = test_indices[:len_test_indices]
+		train_indices = np.concatenate([train_indices, extra_test])
+
+		self._train_meta = list(np.array(self._metadata)[train_indices])
+		self._test_meta = list(np.array(self._metadata)[test_indices])
+
+		self.test_steps = len(self._test_meta) // hparams.tacotron_batch_size
+
+		if hparams.tacotron_test_size is None:
+			assert hparams.tacotron_test_batches == self.test_steps
 
 		#pad input sequences with the <pad_token> 0 ( _ )
 		self._pad = 0
 		#explicitely setting the padding to a value that doesn't originally exist in the spectogram
 		#to avoid any possible conflicts, without affecting the output range of the model too much
-		self._target_pad = -(hparams.max_abs_value + 1) if hparams.symmetric_mels else -1
+		if hparams.symmetric_mels:
+			self._target_pad = -(hparams.max_abs_value + .1)
+		else:
+			self._target_pad = -0.1
 		#Mark finished sequences with 1s
 		self._token_pad = 1.
-
-		self.speaker_num = len(self._hparams.anchor_dirs)
-		self._train_offset = np.zeros(self.speaker_num, dtype=np.int32)
-		self._test_offset = np.zeros(self.speaker_num, dtype=np.int32)
-		self._metadata = []
-		self._mel_dirs = [os.path.join(metadata_dir, anchor_dir, 'mels') for i, anchor_dir in enumerate(hparams.anchor_dirs)]
-
-		# Load metadata
-		frame_shift_ms = hparams.hop_size / hparams.sample_rate
-		for i, anchor_dir in enumerate(hparams.anchor_dirs):
-			with open(os.path.join(metadata_dir, anchor_dir, 'train.txt'), encoding='utf-8') as f:
-				metadata = [line.strip().split('|') for line in f]
-				self._metadata.append(metadata)
-				hours = sum([int(x[2]) for x in metadata]) * frame_shift_ms / 3600
-				log(f'Loaded {anchor_dir} for {len(metadata)} examples ({hours:.2f} hours)')
-
-		# training and test set indices
-		indices = [np.arange(len(self._metadata[i])) for i in range(self.speaker_num)]
-		self.train_indices = []
-		self.test_indices = []
-		for i in range(self.speaker_num):
-			train_indice, test_indice = train_test_split(indices[i], test_size=test_size, random_state=hparams.tacotron_data_random_state)
-			self.train_indices.append(train_indice)
-			self.test_indices.append(test_indice)
-
-		#Make sure test_indices is a multiple of batch_size else round up
-		len_test_indices = [self._round_down(len(self.test_indices[i]), hparams.tacotron_batch_size) for i in range(self.speaker_num)]
-		self.extra_test = [self.test_indices[i][len_test_indices[i]:] for i in range(self.speaker_num)]
-		for i in range(self.speaker_num):
-			self.test_indices[i] = self.test_indices[i][:len_test_indices[i]]
-			self.train_indices[i] = np.concatenate([self.train_indices[i], self.extra_test[i]])
-
-		# training and test set split
-		self._train_meta = [list(np.array(self._metadata[i])[self.train_indices[i]]) for i in range(self.speaker_num)]
-		self._test_meta = [list(np.array(self._metadata[i])[self.test_indices[i]])  for i in range(self.speaker_num)]
-		self.test_steps = sum(len(self._test_meta[i]) for i in range(len(self._test_meta))) // hparams.tacotron_batch_size
-		if hparams.tacotron_test_size is None:
-			assert hparams.tacotron_test_batches == self.test_steps
 
 		with tf.device('/cpu:0'):
 			# Create placeholders for inputs and targets. Don't specify batch size because we want
@@ -81,28 +77,34 @@ class Feeder:
 			tf.placeholder(tf.int32, shape=(None, ), name='input_lengths'),
 			tf.placeholder(tf.float32, shape=(None, None, hparams.num_mels), name='mel_targets'),
 			tf.placeholder(tf.float32, shape=(None, None), name='token_targets'),
+			tf.placeholder(tf.float32, shape=(None, None, hparams.num_freq), name='linear_targets'),
 			tf.placeholder(tf.int32, shape=(None, ), name='targets_lengths'),
 			]
-			queue = tf.FIFOQueue(8, [tf.int32, tf.int32, tf.float32, tf.float32, tf.int32], name='input_queue')
+
+			# Create queue for buffering data
+			queue = tf.FIFOQueue(8, [tf.int32, tf.int32, tf.float32, tf.float32, tf.float32, tf.int32], name='input_queue')
 			self._enqueue_op = queue.enqueue(self._placeholders)
-			self.inputs, self.input_lengths, self.mel_targets, self.token_targets, self.targets_lengths = queue.dequeue()
+			self.inputs, self.input_lengths, self.mel_targets, self.token_targets, self.linear_targets, self.targets_lengths = queue.dequeue()
 
 			self.inputs.set_shape(self._placeholders[0].shape)
 			self.input_lengths.set_shape(self._placeholders[1].shape)
 			self.mel_targets.set_shape(self._placeholders[2].shape)
 			self.token_targets.set_shape(self._placeholders[3].shape)
-			self.targets_lengths.set_shape(self._placeholders[4].shape)
+			self.linear_targets.set_shape(self._placeholders[4].shape)
+			self.targets_lengths.set_shape(self._placeholders[5].shape)
 
 			# Create eval queue for buffering eval data
-			eval_queue = tf.FIFOQueue(1, [tf.int32, tf.int32, tf.float32, tf.float32, tf.int32], name='eval_queue')
+			eval_queue = tf.FIFOQueue(1, [tf.int32, tf.int32, tf.float32, tf.float32, tf.float32, tf.int32], name='eval_queue')
 			self._eval_enqueue_op = eval_queue.enqueue(self._placeholders)
-			self.eval_inputs, self.eval_input_lengths, self.eval_mel_targets, self.eval_token_targets, self.eval_targets_lengths = eval_queue.dequeue()
+			self.eval_inputs, self.eval_input_lengths, self.eval_mel_targets, self.eval_token_targets, \
+				self.eval_linear_targets, self.eval_targets_lengths = eval_queue.dequeue()
 
 			self.eval_inputs.set_shape(self._placeholders[0].shape)
 			self.eval_input_lengths.set_shape(self._placeholders[1].shape)
 			self.eval_mel_targets.set_shape(self._placeholders[2].shape)
 			self.eval_token_targets.set_shape(self._placeholders[3].shape)
-			self.eval_targets_lengths.set_shape(self._placeholders[4].shape)
+			self.eval_linear_targets.set_shape(self._placeholders[4].shape)
+			self.eval_targets_lengths.set_shape(self._placeholders[5].shape)
 
 	def start_threads(self, session):
 		self._session = session
@@ -114,86 +116,94 @@ class Feeder:
 		thread.daemon = True #Thread will close when parent quits
 		thread.start()
 
-	def _get_test_groups(self, speaker_id):
-		meta = self._test_meta[speaker_id][self._test_offset[speaker_id]]
-		mel_target = np.load(os.path.join(self._mel_dirs[speaker_id], meta[0])).T
-		self._test_offset[speaker_id] += 1
-		text = meta[3]
-		input_data = np.asarray(text_to_sequence(text, speaker_id, self._cleaner_names), dtype=np.int32)
+	def _get_test_groups(self):
+		meta = self._test_meta[self._test_offset]
+		self._test_offset += 1
+
+		text = meta[5]
+
+		input_data = np.asarray(text_to_sequence(text, self._cleaner_names), dtype=np.int32)
+		mel_target = np.load(os.path.join(self._mel_dir, meta[1]))
 		#Create parallel sequences containing zeros to represent a non finished sequence
 		token_target = np.asarray([0.] * (len(mel_target) - 1))
-		return (input_data, mel_target, token_target, len(mel_target))
+		linear_target = np.load(os.path.join(self._linear_dir, meta[2]))
+		return (input_data, mel_target, token_target, linear_target, len(mel_target))
 
 	def make_test_batches(self):
-		# Test on entire test set
-		# number of speakers must be integer multiple of batch size
-		examples = []
 		start = time.time()
+
+		# Read a group of examples
 		n = self._hparams.tacotron_batch_size
-		for i in range(self.speaker_num):
-			examples.extend([self._get_test_groups(i) for j in range(len(self._test_meta[i]))])
-		examples.sort(key=lambda x: x[-1])
+		r = self._hparams.outputs_per_step
+
+		#Test on entire test set
+		examples = [self._get_test_groups() for i in range(len(self._test_meta))]
+
 		# Bucket examples based on similar output sequence length for efficiency
-		batches = [examples[i: i+n] for j in range(0, len(examples), n)]
+		examples.sort(key=lambda x: x[-1])
+		batches = [examples[i: i+n] for i in range(0, len(examples), n)]
 		np.random.shuffle(batches)
-		end = time.time() - start
-		log(f'Generated {len(batches)} test batches of size {n} in {end:.3f} sec')
-		return batches
+
+		log('\nGenerated {} test batches of size {} in {:.3f} sec'.format(len(batches), n, time.time() - start))
+		return batches, r
 
 	def _enqueue_next_train_group(self):
 		while not self._coord.should_stop():
 			start = time.time()
 
 			# Read a group of examples
-			examples = []
 			n = self._hparams.tacotron_batch_size
-			for i in range(self.speaker_num):
-				for j in range(n // self.speaker_num * _batches_per_group):
-					examples.append(self._get_next_example(i))
-			examples.sort(key=lambda x: x[-1])
+			r = self._hparams.outputs_per_step
+			examples = [self._get_next_example() for i in range(n * _batches_per_group)]
+
 			# Bucket examples based on similar output sequence length for efficiency
+			examples.sort(key=lambda x: x[-1])
 			batches = [examples[i: i+n] for i in range(0, len(examples), n)]
 			np.random.shuffle(batches)
-			end = time.time() - start
-			log(f'Generated {len(batches)} train batches of size {n} in {end:.3f} sec')
+
+			log('\nGenerated {} train batches of size {} in {:.3f} sec'.format(len(batches), n, time.time() - start))
 			for batch in batches:
-				feed_dict = dict(zip(self._placeholders, self._prepare_batch(batch, self._hparams.outputs_per_step)))
+				feed_dict = dict(zip(self._placeholders, self._prepare_batch(batch, r)))
 				self._session.run(self._enqueue_op, feed_dict=feed_dict)
 
 	def _enqueue_next_test_group(self):
 		#Create test batches once and evaluate on them for all test steps
-		test_batches = self.make_test_batches()
+		test_batches, r = self.make_test_batches()
 		while not self._coord.should_stop():
 			for batch in test_batches:
-				feed_dict = dict(zip(self._placeholders, self._prepare_batch(batch, self._hparams.outputs_per_step)))
+				feed_dict = dict(zip(self._placeholders, self._prepare_batch(batch, r)))
 				self._session.run(self._eval_enqueue_op, feed_dict=feed_dict)
 
-	def _get_next_example(self, speaker_id):
+	def _get_next_example(self):
+		"""Gets a single example (input, mel_target, token_target, linear_target, mel_length) from_ disk
 		"""
-		Gets a single example (input, mel_target, token_target, mel_length) from_ disk
-		"""
-		if self._train_offset[speaker_id] >= len(self._train_meta[speaker_id]):
-			self._train_offset[speaker_id] = 0
-			np.random.shuffle(self._train_meta[speaker_id])
-		meta = self._train_meta[speaker_id][self._train_offset[speaker_id]]
-		self._train_offset[speaker_id] += 1
-		mel_target = np.load(os.path.join(self._mel_dirs[speaker_id], meta[0])).T
+		if self._train_offset >= len(self._train_meta):
+			self._train_offset = 0
+			np.random.shuffle(self._train_meta)
 
-		text = meta[3]
-		input_data = np.asarray(text_to_sequence(text, speaker_id, self._cleaner_names), dtype=np.int32)
+		meta = self._train_meta[self._train_offset]
+		self._train_offset += 1
+
+		text = meta[5]
+
+		input_data = np.asarray(text_to_sequence(text, self._cleaner_names), dtype=np.int32)
+		mel_target = np.load(os.path.join(self._mel_dir, meta[1]))
 		#Create parallel sequences containing zeros to represent a non finished sequence
 		token_target = np.asarray([0.] * (len(mel_target) - 1))
+		linear_target = np.load(os.path.join(self._linear_dir, meta[2]))
+		return (input_data, mel_target, token_target, linear_target, len(mel_target))
 
-		return (input_data, mel_target, token_target, len(mel_target))
 
 	def _prepare_batch(self, batch, outputs_per_step):
+		np.random.shuffle(batch)
 		inputs = self._prepare_inputs([x[0] for x in batch])
 		input_lengths = np.asarray([len(x[0]) for x in batch], dtype=np.int32)
 		mel_targets = self._prepare_targets([x[1] for x in batch], outputs_per_step)
 		#Pad sequences with 1 to infer that the sequence is done
 		token_targets = self._prepare_token_targets([x[2] for x in batch], outputs_per_step)
-		targets_lengths = np.asarray([x[3] for x in batch], dtype=np.int32) #Used to mask loss
-		return (inputs, input_lengths, mel_targets, token_targets, targets_lengths)
+		linear_targets = self._prepare_targets([x[3] for x in batch], outputs_per_step)
+		targets_lengths = np.asarray([x[-1] for x in batch], dtype=np.int32) #Used to mask loss
+		return (inputs, input_lengths, mel_targets, token_targets, linear_targets, targets_lengths)
 
 	def _prepare_inputs(self, inputs):
 		max_len = max([len(x) for x in inputs])
