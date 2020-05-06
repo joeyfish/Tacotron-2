@@ -1,4 +1,4 @@
-import os
+import os, sys
 import wave
 from datetime import datetime
 import io
@@ -20,14 +20,17 @@ class Synthesizer:
 		targets = tf.placeholder(tf.float32, [None, None, hparams.num_mels], 'mel_targets')
 		with tf.variable_scope('model') as scope:
 			self.model = create_model(model_name, hparams)
-			self.speaker_num = len(hparams.anchor_dirs)
 			if gta:
-				self.model.initialize(inputs, input_lengths, targets, gta=gta, speaker_num=self.speaker_num)
+				self.model.initialize(inputs, input_lengths, targets, gta=gta)
 			else:
-				self.model.initialize(inputs, input_lengths, speaker_num=self.speaker_num)
+				self.model.initialize(inputs, input_lengths)
 			self.alignments = self.model.alignments
 			self.mel_outputs = self.model.mel_outputs
 			self.stop_token_prediction = self.model.stop_token_prediction
+			if hparams.predict_linear and not gta:
+				self.linear_outputs = self.model.linear_outputs
+				self.linear_spectrograms = tf.placeholder(tf.float32, (None, hparams.num_freq), name='linear_spectrograms')
+				self.linear_wav_outputs = audio.inv_spectrogram_tensorflow(self.linear_spectrograms, hparams)
 
 		self.gta = gta
 		self._hparams = hparams
@@ -35,11 +38,21 @@ class Synthesizer:
 		self._pad = 0
 		#explicitely setting the padding to a value that doesn't originally exist in the spectogram
 		#to avoid any possible conflicts, without affecting the output range of the model too much
-		self._target_pad = -(hparams.max_abs_value + 1) if hparams.symmetric_mels else -1
+		if hparams.symmetric_mels:
+			self._target_pad = -(hparams.max_abs_value + .1)
+		else:
+			self._target_pad = -0.1
 
-		self.checkpoint_path = checkpoint_path
 		log('Loading checkpoint: %s' % checkpoint_path)
+		#Memory allocation on the GPU as needed
+		config = tf.ConfigProto()
+		config.gpu_options.allow_growth = True
 
+		self.session = tf.Session(config=config)
+		self.session.run(tf.global_variables_initializer())
+
+		saver = tf.train.Saver()
+		saver.restore(self.session, checkpoint_path)
 
 	def session_open(self):
 		#Memory allocation on the GPU as needed
@@ -53,14 +66,15 @@ class Synthesizer:
 		saver.restore(self.session, self.checkpoint_path)
 
 
+
 	def session_close(self):
 		self.session.close()
 
 
-	def synthesize(self, batch, basenames, out_dir, log_dir, mel_filenames, speaker_id):
+	def synthesize(self, texts, basenames, out_dir, log_dir, mel_filenames):
 		hparams = self._hparams
 		cleaner_names = [x.strip() for x in hparams.cleaners.split(',')]
-		seqs = [np.asarray(text_to_sequence(text, speaker_id, cleaner_names)) for text in batch]
+		seqs = [np.asarray(text_to_sequence(text, cleaner_names)) for text in texts]
 		input_lengths = [len(seq) for seq in seqs]
 		seqs = self._prepare_inputs(seqs)
 		feed_dict = {
@@ -69,40 +83,95 @@ class Synthesizer:
 		}
 
 		if self.gta:
-			np_targets = [np.load(mel_filename).T for mel_filename in mel_filenames]
+			np_targets = [np.load(mel_filename) for mel_filename in mel_filenames]
 			target_lengths = [len(np_target) for np_target in np_targets]
 			padded_targets = self._prepare_targets(np_targets, self._hparams.outputs_per_step)
 			feed_dict[self.model.mel_targets] = padded_targets.reshape(len(np_targets), -1, hparams.num_mels)
 
+		if self.gta or not hparams.predict_linear:
 			mels, alignments = self.session.run([self.mel_outputs, self.alignments], feed_dict=feed_dict)
-			mels = [mel[:target_length, :] for mel, target_length in zip(mels, target_lengths)] #Take off the reduction factor padding frames for time consistency with wavenet
-			assert len(mels) == len(np_targets)
+			if self.gta:
+				mels = [mel[:target_length, :] for mel, target_length in zip(mels, target_lengths)] #Take off the reduction factor padding frames for time consistency with wavenet
+				assert len(mels) == len(np_targets)
+
+		else:
+			linears, mels, alignments, stop_tokens = self.session.run([self.linear_outputs, self.mel_outputs, self.alignments, self.stop_token_prediction], feed_dict=feed_dict)
+
+			#Get Mel/Linear lengths for the entire batch from stop_tokens predictions
+			target_lengths = self._get_output_lengths(stop_tokens)
+
+			#Take off the batch wise padding
+			mels = [mel[:target_length, :] for mel, target_length in zip(mels, target_lengths)]
+			linears = [linear[:target_length, :] for linear, target_length in zip(linears, target_lengths)]
+			assert len(mels) == len(linears) == len(texts)
+
+		# if basenames is None:
+		# 	#Generate wav and read it
+		# 	wav = audio.inv_mel_spectrogram(mels.T, hparams)
+		# 	audio.save_wav(wav, 'temp.wav', hparams) #Find a better way
+
+		# 	chunk = 512
+		# 	f = wave.open('temp.wav', 'rb')
+		# 	p = pyaudio.PyAudio()
+		# 	stream = p.open(format=p.get_format_from_width(f.getsampwidth()),
+		# 		channels=f.getnchannels(),
+		# 		rate=f.getframerate(),
+		# 		output=True)
+		# 	data = f.readframes(chunk)
+		# 	while data:
+		# 		stream.write(data)
+		# 		data=f.readframes(chunk)
+
+		# 	stream.stop_stream()
+		# 	stream.close()
+
+		# 	p.terminate()
+		# 	return
+
 
 		saved_mels_paths = []
+		speaker_ids = []
 		for i, mel in enumerate(mels):
+			#Get speaker id for global conditioning (only used with GTA generally)
+			speaker_id = '<no_g>'
+			speaker_ids.append(speaker_id)
+
 			# Write the spectrogram to disk
 			# Note: outputs mel-spectrogram files and target ones have same names, just different folders
-			mel_filename = os.path.join(out_dir, f'{basenames[i]}.npy')
+			mel_filename = os.path.join(out_dir, '{}.npy'.format(basenames[i]))
 			np.save(mel_filename, mel.T, allow_pickle=False)
 			saved_mels_paths.append(mel_filename)
 
 			if log_dir is not None:
 				#save wav (mel -> wav)
 				wav = audio.inv_mel_spectrogram(mel.T, hparams)
-				audio.save_wav(wav, os.path.join(log_dir, f'wavs/wav-{basenames[i]}-mel.wav'), hparams)
+				audio.save_wav(wav, os.path.join(log_dir, 'wavs/wav-{}-mel.wav'.format(basenames[i])), hparams)
 
 				#save alignments
-				plot.plot_alignment(alignments[i], os.path.join(log_dir, f'plots/alignment-{basenames[i]}.png'), info=f'{batch[i]}', split_title=True)
+				plot.plot_alignment(alignments[i], os.path.join(log_dir, 'plots/alignment-{}.png'.format(basenames[i])),
+					info='{}'.format(texts[i]), split_title=True)
 
 				#save mel spectrogram plot
-				plot.plot_spectrogram(mel, os.path.join(log_dir, f'plots/mel-{basenames[i]}.png'), info=f'{batch[i]}', split_title=True)
+				plot.plot_spectrogram(mel, os.path.join(log_dir, 'plots/mel-{}.png'.format(basenames[i])),
+					info='{}'.format(texts[i]), split_title=True)
 
-		return saved_mels_paths
+				if hparams.predict_linear and not self.gta:
+					#save wav (linear -> wav)
+					linear_wav = self.session.run(self.linear_wav_outputs, feed_dict={self.linear_spectrograms: linears[i]})
+					wav = audio.inv_preemphasis(linear_wav, hparams.preemphasis)
+					audio.save_wav(wav, os.path.join(log_dir, 'wavs/wav-{}-linear.wav'.format(i)), hparams)
 
-	def eval(self, batch, speaker_id=0):
+					#save mel spectrogram plot
+					plot.plot_spectrogram(linears[i], os.path.join(log_dir, 'plots/linear-{}.png'.format(basenames[i])),
+						info='{}'.format(texts[i]), split_title=True, auto_aspect=True)
+
+		return saved_mels_paths, speaker_ids
+
+	def eval(self, batch):
 		hparams = self._hparams
 		cleaner_names = [x.strip() for x in hparams.cleaners.split(',')]
-		seqs = [np.asarray(text_to_sequence(text, speaker_id, cleaner_names)) for text in batch]
+		#print(f"\033[1;40;35m*  [{sys._getframe().f_lineno}] === DEBUG cc={cleaner_names} batch={batch}  ====\033[0m")	
+		seqs = [np.asarray(text_to_sequence(text, cleaner_names)) for text in batch]
 		input_lengths = [len(seq) for seq in seqs]
 		seqs = self._prepare_inputs(seqs)
 		feed_dict = {
@@ -110,17 +179,22 @@ class Synthesizer:
 			self.model.input_lengths: np.asarray(input_lengths, dtype=np.int32),
 		}
 
-		mels, stop_tokens = self.session.run([self.mel_outputs, self.stop_token_prediction], feed_dict=feed_dict)
+		linears, stop_tokens = self.session.run([self.linear_outputs, self.stop_token_prediction], feed_dict=feed_dict)
 
 		#Get Mel/Linear lengths for the entire batch from stop_tokens predictions
 		target_lengths = self._get_output_lengths(stop_tokens)
 
 		#Take off the batch wise padding
-		padding = np.full((self._hparams.sentence_span, self._hparams.num_mels), self._target_pad).astype(np.float32)
-		mels = [np.concatenate([mel[:target_length, :], padding]) for mel, target_length in zip(mels, target_lengths)]
-		assert len(mels) == len(batch)
+		linears = [linear[:target_length, :] for linear, target_length in zip(linears, target_lengths)]
+		assert len(linears) == len(batch)
 
-		return np.concatenate(mels)
+		#save wav (linear -> wav)
+		results = []
+		for i, linear in enumerate(linears):
+			linear_wav = self.session.run(self.linear_wav_outputs, feed_dict={self.linear_spectrograms: linear})
+			wav = audio.inv_preemphasis(linear_wav, hparams.preemphasis)
+			results.append(wav)
+		return np.concatenate(results)
 
 	def _round_up(self, x, multiple):
 		remainder = x % multiple

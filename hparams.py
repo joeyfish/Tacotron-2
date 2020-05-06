@@ -1,3 +1,4 @@
+import numpy as np
 import tensorflow as tf
 
 # Default hyperparameters
@@ -13,24 +14,30 @@ hparams = tf.contrib.training.HParams(
 
 	#Audio
 	num_mels = 80, #Number of mel-spectrogram channels and local conditioning dimensionality
+	num_freq = 2049, # (= n_fft / 2 + 1) only used when adding linear spectrograms post processing network
 	rescale = False, #Whether to rescale audio prior to preprocessing
 	rescaling_max = 0.999, #Rescaling value
 	trim_silence = True, #Whether to clip silence in Audio (at beginning and end of audio only, not the middle)
 	clip_mels_length = True, #For cases of OOM (Not really recommended, working on a workaround)
 	max_mel_frames = 900,  #Only relevant when clip_mels_length = True
 	max_text_length = 300,  #Only relevant when clip_mels_length = True
+	use_lws=False,
 	sentence_span = 20,  # Number of mel hops for each sentence interval
 
 	#Mel spectrogram
-	n_fft = 1024, #Extra window size is filled with 0 paddings to match this parameter
-	hop_size = 256, #For 22050Hz, 256 ~= 11.5 ms
-	win_size = 1024, #For 22050Hz, 1024 ~= 46 ms (If None, win_size = n_fft)
-	sample_rate = 22050, #22050 Hz (corresponding to ljspeech dataset)
+	#n_fft = 1024, #Extra window size is filled with 0 paddings to match this parameter
+	n_fft = 4096, # Extra window size is filled with 0 paddings to match this parameter, Quick
+	#hop_size = 256, #For 22050Hz, 256 ~= 11.5 ms
+	hop_size = 600, #For 275 ~= 12.5 ms (0.0125 * sample_rate),Quick
+	#win_size = 1024, #For 22050Hz, 1024 ~= 46 ms (If None, win_size = n_fft)
+	win_size = 2400, # 1100 ~= 50 ms (If None, win_size = n_fft) (0.05 * sample_rate), Quick
+	sample_rate = 16000, #22050 Hz (corresponding to ljspeech dataset)
 	frame_shift_ms = None,
 	preemphasis = 0.97, # preemphasis coefficient
 
 	#Multi-speaker batch_size should be integer multiplies number of speakers.
-	anchor_dirs = ['tts_fanfanli_22050', 'tts_xiaoya_22050', 'tts_yangluzhuo_22050', 'tts_yuanzhonglu_22050'],
+	#anchor_dirs = ['tts_fanfanli_22050', 'tts_xiaoya_22050', 'tts_yangluzhuo_22050', 'tts_yuanzhonglu_22050'],
+	#anchor_dirs = ['mycorpus'] ,
 
 	#M-AILABS (and other datasets) trim params
 	trim_fft_size = 512,
@@ -39,14 +46,15 @@ hparams = tf.contrib.training.HParams(
 
 	#Mel and Linear spectrograms normalization/scaling and clipping
 	signal_normalization = True,
-	allow_clipping_in_normalization = True, #Only relevant if mel_normalization = True
+	allow_clipping_in_normalization = False, #Only relevant if mel_normalization = True
 	symmetric_mels = True, #Whether to scale the data to be symmetric around 0
 	max_abs_value = 4., #max absolute value of data. If symmetric, data will be [-max, max] else [0, max]
+	normalize_for_wavenet = True, #whether to rescale to [0, 1] for wavenet.
 
 	#Limits
 	min_level_db = -100,
 	ref_level_db = 20,
-	fmin = 50, #Set this to 75 if your speaker is male! if female, 125 should help taking off noise. (To test depending on dataset)
+	fmin = 75, #Set this to 75 if your speaker is male! if female, 125 should help taking off noise. (To test depending on dataset)
 	fmax = 7600,
 
 	#Griffin Lim
@@ -88,10 +96,21 @@ hparams = tf.contrib.training.HParams(
 	postnet_kernel_size = (5, ), #size of postnet convolution filters for each layer
 	postnet_channels = 512, #number of postnet convolution filters for each layer
 
+	#CBHG mel->linear postnet
+	cbhg_kernels = 8, #All kernel sizes from 1 to cbhg_kernels will be used in the convolution bank of CBHG to act as "K-grams"
+	cbhg_conv_channels = 128, #Channels of the convolution bank
+	cbhg_pool_size = 2, #pooling size of the CBHG
+	cbhg_projection = 256, #projection channels of the CBHG (1st projection, 2nd is automatically set to num_mels)
+	cbhg_projection_kernel_size = 3, #kernel_size of the CBHG projections
+	cbhg_highwaynet_layers = 4, #Number of HighwayNet layers
+	cbhg_highway_units = 128, #Number of units used in HighwayNet fully connected layers
+	cbhg_rnn_units = 128, #Number of GRU units used in bidirectional RNN of CBHG block. CBHG output is 2x rnn_units in shape
+
 	#Loss params
 	mask_encoder = False, #whether to mask encoder padding while computing attention. Set to True for better prosody but slower convergence.
 	mask_decoder = False, #Whether to use loss mask for padded sequences (if False, <stop_token> loss function will not be weighted, else recommended pos_weight = 20)
 	cross_entropy_pos_weight = 1, #Use class weights to reduce the stop token classes imbalance (by adding more penalty on False Negatives (FN)) (1 = disabled)
+	predict_linear = True, #Whether to add a post-processing network to the Tacotron to predict linear spectrograms (True mode Not tested!!)
 	###########################################################################################################################################
 
 	#Tacotron Training
@@ -210,53 +229,53 @@ hparams = tf.contrib.training.HParams(
 	# "e2 luo2 si1 zhun3 bei4 tong2 mei3 guo2 jin4 xing2 dui4 hua4 .",
 	# "fan3 zheng4 bu2 shi4 mo4 si1 ke1 yao4 tui4 chu1 zhong1 dao3 tiao2 yue1 .",
 
-	"guan1 yu2 xi1 zang4 de5 chuan2 shuo1 you2 hen3 duo1 ,",
-	"li4 lai2 , dou1 shi4 chao2 sheng4 zhe3 de5 tian1 tang2 ,",
-	"er2 zuo4 wei2 zhong1 guo2 xi1 nan2 bian1 chui2 zhong4 di4 ,",
-	"ye3 dou1 shi4 zhong1 guo2 ling3 tu3 bu4 ke3 fen1 ge1 de5 yi2 bu4 fen5 .",
-	"er4 ling2 yi1 wu3 nian2 , yang1 shi4 ceng2 jing1 bo1 chu1 guo4 yi2 bu4 gao1 fen1 ji4 lu4 pian4 ,",
-	"di4 san1 ji2",
-	"pian4 zhong1 , tian1 gao1 di4 kuo4 de5 feng1 jing3 ,",
-	"rang4 wu2 shu4 ren2 dui4 xi1 zang4 qing2 gen1 shen1 zhong4 .",
-	"shi2 ge2 liang3 nian2 , you2 yuan2 ban1 ren2 ma3 da3 zao4 de5 jie3 mei4 pian1 ,",
-	"ji2 di4 , qiao1 ran2 shang4 xian4 !",
-	"mei3 yi4 zheng1 dou1 shi4 bi4 zhi3 , mei3 yi2 mu4 dou1 shi4 ren2 jian1 xian1 jing4 .",
-	"zi4 ying3 pian4 bo1 chu1 zhi1 lai2 , hao3 ping2 ru2 chao2 ,",
-	"jiu4 lian2 yi2 xiang4 yi3 yan2 jin3 chu1 ming2 de5 dou4 ban4 ping2 fen5 ye3 shi4 hen3 gao1 .",
-	"zao3 zai4 er4 ling2 yi1 wu3 nian2 ,",
-	"ta1 de5 di4 yi1 ji4 di4 san1 ji2 jiu4 na2 dao4 le5 dou4 ban4 jiu2 dian3 er4 fen1 .",
-	"er2 rang4 ta1 yi2 xia4 na2 dao4 jiu2 dian3 wu3 fen1 de5 yuan2 yin1 shi4 yin1 wei4 ,",
-	"ta1 zhan3 shi4 le5 zai4 na4 pian4 jue2 mei3 yu3 pin2 ji2 bing4 cun2 de5 jing4 tu3 shang4 ,",
-	"pu3 tong1 ren2 de5 zhen1 shi2 sheng1 huo2 shi4 shen2 me5 yang4 zi5 .",
+	# "guan1 yu2 xi1 zang4 de chuan2 shuo1 you3 hen3 duo1 ,",
+	# "li4 lai2 , dou1 shi4 chao2 sheng4 zhe3 de tian1 tang2 ,",
+	# "er2 zuo4 wei2 zhong1 guo2 xi1 nan2 bian1 chui2 zhong4 de4 ,",
+	# "ye3 dou1 shi4 zhong1 guo2 ling3 tu3 bu4 ke3 fen1 ge1 de yi2 bu4 fen .",
+	# "er4 ling2 yi1 wu3 nian2 , yang1 shi4 ceng2 jing1 bo1 chu1 guo4 yi2 bu4 gao1 fen1 ji4 lu4 pian4 ,",
+	# "di4 san1 ji2",
+	# "pian4 zhong1 , tian1 gao1 di4 kuo4 de feng1 jing3 ,",
+	# "rang4 wu2 shu4 ren2 dui4 xi1 zang4 qing2 gen1 shen1 zhong4 .",
+	# "shi2 ge2 liang3 nian2 , you2 yuan2 ban1 ren2 ma3 da3 zao4 de jie3 mei4 pian1 ,",
+	# "ji2 di4 , qiao1 ran2 shang4 xian4 !",
+	# "mei3 yi4 zheng4 dou1 shi4 bi4 zhi3 , mei3 yi2 mu4 dou1 shi4 ren2 jian1 xian1 jing4 .",
+	# "zi4 ying3 pian1 bo1 chu1 zhi1 lai2 , hao3 ping2 ru2 chao2 ,",
+	# "jiu4 lian2 yi2 xiang4 yi3 yan2 jin3 chu1 ming2 de dou4 ban4 ping2 fen1 ye3 shi4 hen3 gao1 .",
+	# "zao3 zai4 er4 ling2 yi1 wu3 nian2 ,",
+	# "ta1 de di4 yi1 ji4 di4 san1 ji2 jiu4 na2 dao4 le dou4 ban4 jiu2 dian3 er4 fen1 .",
+	# "er2 rang4 ta1 yi2 xia4 na2 dao4 jiu2 dian3 wu3 fen1 de yuan2 yin1 shi4 yin1 wei4, ",
+	# "ta1 zhan3 shi4 le zai4 na4 pian4 jue2 mei3 yu3 pin2 ji2 bing4 cun2 de jing4 tu3 shang4 ,",
+	# "pu3 tong1 ren2 de zhen1 shi2 sheng1 huo2 shi4 shen2 me yang4 zi .",
 
-	# "bai2 jia1 xuan1 hou4 lai2 yin2 yi3 hao2 zhuang4 de shi4 yi4 sheng1 li3 qu3 guo4 qi1 fang2 nv3 ren2 .",
-	# "qu3 tou2 fang2 xi2 fu4 shi2 ta1 gang1 gang1 guo4 shi2 liu4 sui4 sheng1 ri4 .",
-	# "na4 shi4 xi1 yuan2 shang4 gong3 jia1 cun1 da4 hu4 gong3 zeng1 rong2 de tou2 sheng1 nv3 ,",
-	# "bi3 ta1 da4 liang3 sui4 .",
-	# "ta1 zai4 wan2 quan2 wu2 zhi1 huang1 luan4 zhong1 , du4 guo4 le xin1 hun1 zhi1 ye4 ,",
-	# "liu2 xia4 le yong2 yuan3 xiu1 yu2 xiang4 ren2 dao4 ji2 de ke3 xiao4 de sha3 yang4 ,",
-	# "er2 zi4 ji3 que4 yong3 sheng1 nan2 yi3 wang4 ji4 .",
-	# "yi4 nian2 hou4 , zhe4 ge4 nv3 ren2 si3 yu2 nan2 chan3 .",
-	# "di4 er4 fang2 qu3 de shi4 nan2 yuan2 pang2 jia1 cun1 yin1 shi2 ren2 jia1 , pang2 xiu1 rui4 de nai3 gan1 nv3 er2 .",
-	# "zhe4 nv3 zi3 you4 zheng4 hao3 bi3 ta1 xiao2 liang3 sui4 ,",
-	# "mu2 yang4 jun4 xiu4 yan3 jing1 hu1 ling2 er .",
-	# "ta1 wan2 quan2 bu4 zhi1 dao4 jia4 ren2 shi4 zen3 me hui2 shi4 ,",
-	# "er2 ta1 ci3 shi2 yi3 an1 shu2 nan2 nv3 zhi1 jian1 suo2 you3 de yin3 mi4 .",
-	# "ta1 kan4 zhe ta1 de xiu1 qie4 huang1 luan4 er2 xiang3 dao4 zi4 ji3 di4 yi1 ci4 de sha3 yang4 fan3 dao4 jue2 de geng4 fu4 ci4 ji .",
-	# "dang1 ta1 hong1 suo1 zhe ba3 duo2 duo3 shan2 shan3 er2 you4 bu4 gan3 wei2 ao4 ta1 de xiao3 xi2 fu4 guo3 ru4 shen1 xia4 de shi2 hou4 ,",
-	# "ta1 ting1 dao4 le ta1 de bu2 shi4 huan1 le4 er2 shi4 tong4 ku3 de yi4 sheng1 ku1 jiao4 .",
-	# "dang1 ta1 pi2 bei4 de xie1 xi1 xia4 lai2 ,",
-	# "cai2 fa1 jue2 jian1 bang3 nei4 ce4 teng2 tong4 zuan1 xin1 ,",
-	# "ta1 ba3 ta1 yao3 lan4 le .",
-	# "ta1 fu3 shang1 xi1 tong4 de shi2 hou4 ,",
-	# "xin1 li3 jiu4 chao2 qi3 le dui4 zhe4 ge4 jiao1 guan4 de you2 dian3 ren4 xing4 de nai3 gan1 nv3 er de nao2 huo3 .",
-	# "zheng4 yu4 fa1 zuo4 ,",
-	# "ta1 que4 ban1 guo4 ta1 de jian1 bang3 an4 shi4 ta1 zai4 lai2 yi1 ci4 .",
-	# "yi4 dang1 jing1 guo4 nan2 nv3 jian1 de di4 yi1 ci4 jiao1 huan1 ,",
-	# "ta1 jiu4 bian4 de2 mei2 you3 jie2 zhi4 de ren4 xing4 .",
-	# "zhe4 ge4 nv3 ren2 cong2 xia4 jiao4 ding3 zhe hong2 chou2 gai4 jin1 , jin4 ru4 bai2 jia1 men2 lou2 ,",
-	# "dao4 tang3 jin4 yi2 ju4 bao2 ban3 guan1 cai tai2 chu1 zhe4 ge4 men2 lou2 ,",
-	# "shi2 jian1 shang4 bu4 zu2 yi1 nian2 , shi4 hai4 lao2 bing4 si3 de .",
+	"bai2 jia1 xuan1 hou4 lai2 yin2 yi3 hao2 zhuang4 de shi4 yi4 sheng1 li3 qu3 guo4 qi1 fang2 nv3 ren2 .",
+	"qu3 tou2 fang2 xi2 fu4 shi2 ta1 gang1 gang1 guo4 shi2 liu4 sui4 sheng1 ri4 .",
+	"na4 shi4 xi1 yuan2 shang4 gong3 jia1 cun1 da4 hu4 gong3 zeng1 rong2 de tou2 sheng1 nv3 ,",
+	"bi3 ta1 da4 liang3 sui4 .",
+	"ta1 zai4 wan2 quan2 wu2 zhi1 huang1 luan4 zhong1 , du4 guo4 le xin1 hun1 zhi1 ye4 ,",
+	"liu2 xia4 le yong2 yuan3 xiu1 yu2 xiang4 ren2 dao4 ji2 de ke3 xiao4 de sha3 yang4 ,",
+	"er2 zi4 ji3 que4 yong3 sheng1 nan2 yi3 wang4 ji4 .",
+	"yi4 nian2 hou4 , zhe4 ge4 nv3 ren2 si3 yu2 nan2 chan3 .",
+	"di4 er4 fang2 qu3 de shi4 nan2 yuan2 pang2 jia1 cun1 yin1 shi2 ren2 jia1 , pang2 xiu1 rui4 de nai3 gan1 nv3 er2 .",
+	"zhe4 nv3 zi3 you4 zheng4 hao3 bi3 ta1 xiao2 liang3 sui4 ,",
+	"mu2 yang4 jun4 xiu4 yan3 jing1 hu1 ling2 er .",
+	"ta1 wan2 quan2 bu4 zhi1 dao4 jia4 ren2 shi4 zen3 me hui2 shi4 ,",
+	"er2 ta1 ci3 shi2 yi3 an1 shu2 nan2 nv3 zhi1 jian1 suo2 you3 de yin3 mi4 .",
+	"ta1 kan4 zhe ta1 de xiu1 qie4 huang1 luan4 er2 xiang3 dao4 zi4 ji3 di4 yi1 ci4 de sha3 yang4 fan3 dao4 jue2 de geng4 fu4 ci4 ji .",
+	"dang1 ta1 hong1 suo1 zhe ba3 duo2 duo3 shan2 shan3 er2 you4 bu4 gan3 wei2 ao4 ta1 de xiao3 xi2 fu4 guo3 ru4 shen1 xia4 de shi2 hou4 ,",
+	"ta1 ting1 dao4 le ta1 de bu2 shi4 huan1 le4 er2 shi4 tong4 ku3 de yi4 sheng1 ku1 jiao4 .",
+	"dang1 ta1 pi2 bei4 de xie1 xi1 xia4 lai2 ,",
+	"cai2 fa1 jue2 jian1 bang3 nei4 ce4 teng2 tong4 zuan1 xin1 ,",
+	"ta1 ba3 ta1 yao3 lan4 le .",
+	"ta1 fu3 shang1 xi1 tong4 de shi2 hou4 ,",
+	"xin1 li3 jiu4 chao2 qi3 le dui4 zhe4 ge4 jiao1 guan4 de you2 dian3 ren4 xing4 de nai3 gan1 nv3 er de nao2 huo3 .",
+	"zheng4 yu4 fa1 zuo4 ,",
+	"ta1 que4 ban1 guo4 ta1 de jian1 bang3 an4 shi4 ta1 zai4 lai2 yi1 ci4 .",
+	"yi4 dang1 jing1 guo4 nan2 nv3 jian1 de di4 yi1 ci4 jiao1 huan1 ,",
+	"ta1 jiu4 bian4 de2 mei2 you3 jie2 zhi4 de ren4 xing4 .",
+	"zhe4 ge4 nv3 ren2 cong2 xia4 jiao4 ding3 zhe hong2 chou2 gai4 jin1 , jin4 ru4 bai2 jia1 men2 lou2 ,",
+	"dao4 tang3 jin4 yi2 ju4 bao2 ban3 guan1 cai tai2 chu1 zhe4 ge4 men2 lou2 ,",
+	"shi2 jian1 shang4 bu4 zu2 yi1 nian2 , shi4 hai4 lao2 bing4 si3 de .",
 	]
 
 	)

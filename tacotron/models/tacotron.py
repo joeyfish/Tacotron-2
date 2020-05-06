@@ -16,8 +16,8 @@ class Tacotron():
 		self._hparams = hparams
 
 
-	def initialize(self, inputs, input_lengths, mel_targets=None, stop_token_targets=None, targets_lengths=None, gta=False,
-			global_step=None, is_training=False, is_evaluating=False, speaker_num=1):
+	def initialize(self, inputs, input_lengths, mel_targets=None, stop_token_targets=None, linear_targets=None, targets_lengths=None, gta=False,
+			global_step=None, is_training=False, is_evaluating=False):
 		"""
 		Initializes the model for inference
 
@@ -25,20 +25,21 @@ class Tacotron():
 
 		Args:
 			- inputs: int32 Tensor with shape [N, T_in] where N is batch size, T_in is number of
-			  steps in the input time series, and values are character IDs.
+			  steps in the input time series, and values are character IDs
 			- input_lengths: int32 Tensor with shape [N] where N is batch size and values are the lengths
-				of each sequence in inputs.
+			of each sequence in inputs.
 			- mel_targets: float32 Tensor with shape [N, T_out, M] where N is batch size, T_out is number
-				of steps in the output time series, M is num_mels, and values are entries in the mel
-				spectrogram. Only needed for training.
-			- speaker_num: int32 scalar, indicating the number of speaker.
-			- speaker_ids: int32 Tensor with shape[N, T_in] where N is batch size and T_in is number of
-			  steps in the input time series, the values are speaker IDs.
+			of steps in the output time series, M is num_mels, and values are entries in the mel
+			spectrogram. Only needed for training.
 		"""
 		if mel_targets is None and stop_token_targets is not None:
 			raise ValueError('no mel targets were provided but token_targets were given')
 		if mel_targets is not None and stop_token_targets is None and not gta:
 			raise ValueError('Mel targets are provided without corresponding token_targets')
+		if not gta and self._hparams.predict_linear==True and linear_targets is None and is_training:
+			raise ValueError('Model is set to use post processing to predict linear spectrograms in training but no linear targets given!')
+		if gta and linear_targets is not None:
+			raise ValueError('Linear spectrogram prediction is not supported in GTA mode!')
 		if is_training and self._hparams.mask_decoder and targets_lengths is None:
 			raise RuntimeError('Model set to mask paddings but no targets lengths provided for the mask!')
 		if is_training and is_evaluating:
@@ -51,18 +52,26 @@ class Tacotron():
 			if hp.tacotron_teacher_forcing_mode == 'scheduled' and is_training:
 				assert global_step is not None
 
+			#GTA is only used for predicting mels to train Wavenet vocoder, so we ommit post processing when doing GTA synthesis
+			post_condition = hp.predict_linear and not gta
+
 			# Embeddings ==> [batch_size, sequence_length, embedding_dim]
-			embedding_table = tf.get_variable(f'text_embedding', [speaker_num * len(symbols), hp.embedding_dim], dtype=tf.float32)
+			embedding_table = tf.get_variable(
+				'inputs_embedding', [len(symbols), hp.embedding_dim], dtype=tf.float32)
 			embedded_inputs = tf.nn.embedding_lookup(embedding_table, inputs)
 
+
 			#Encoder Cell ==> [batch_size, encoder_steps, encoder_lstm_units]
-			encoder_cell = TacotronEncoderCell(EncoderConvolutions(is_training, hparams=hp, scope='encoder_convolutions'),
-				EncoderRNN(is_training, size=hp.encoder_lstm_units, zoneout=hp.tacotron_zoneout_rate, scope='encoder_LSTM'))
+			encoder_cell = TacotronEncoderCell(
+				EncoderConvolutions(is_training, hparams=hp, scope='encoder_convolutions'),
+				EncoderRNN(is_training, size=hp.encoder_lstm_units,
+					zoneout=hp.tacotron_zoneout_rate, scope='encoder_LSTM'))
 
 			encoder_outputs = encoder_cell(embedded_inputs, input_lengths)
 
 			#For shape visualization purpose
 			enc_conv_output_shape = encoder_cell.conv_output_shape
+
 
 			#Decoder Parts
 			#Attention Decoder Prenet
@@ -81,7 +90,12 @@ class Tacotron():
 
 
 			#Decoder Cell ==> [batch_size, decoder_steps, num_mels * r] (after decoding)
-			decoder_cell = TacotronDecoderCell(prenet, attention_mechanism, decoder_lstm, frame_projection, stop_projection)
+			decoder_cell = TacotronDecoderCell(
+				prenet,
+				attention_mechanism,
+				decoder_lstm,
+				frame_projection,
+				stop_projection)
 
 
 			#Define the helper for our decoder
@@ -122,8 +136,26 @@ class Tacotron():
 			residual_projection = FrameProjection(hp.num_mels, scope='postnet_projection')
 			projected_residual = residual_projection(residual)
 
+
 			#Compute the mel spectrogram
 			mel_outputs = decoder_output + projected_residual
+
+
+			if post_condition:
+				# Add post-processing CBHG. This does a great job at extracting features from mels before projection to Linear specs.
+				post_cbhg = CBHG(hp.cbhg_kernels, hp.cbhg_conv_channels, hp.cbhg_pool_size, [hp.cbhg_projection, hp.num_mels],
+					hp.cbhg_projection_kernel_size, hp.cbhg_highwaynet_layers,
+					hp.cbhg_highway_units, hp.cbhg_rnn_units, hp.batch_norm_position, is_training, name='CBHG_postnet')
+
+				#[batch_size, decoder_steps(mel_frames), cbhg_channels]
+				post_outputs = post_cbhg(mel_outputs, None)
+
+				#Linear projection of extracted features to make linear spectrogram
+				linear_specs_projection = FrameProjection(hp.num_freq, scope='cbhg_linear_specs_projection')
+
+				#[batch_size, decoder_steps(linear_frames), num_freq]
+				linear_outputs = linear_specs_projection(post_outputs)
+
 
 			#Grab alignments from the final decoder state
 			alignments = tf.transpose(final_decoder_state.alignment_history.stack(), [1, 2, 0])
@@ -137,21 +169,26 @@ class Tacotron():
 			self.stop_token_prediction = stop_token_prediction
 			self.stop_token_targets = stop_token_targets
 			self.mel_outputs = mel_outputs
+			if post_condition:
+				self.linear_outputs = linear_outputs
+				self.linear_targets = linear_targets
 			self.mel_targets = mel_targets
 			self.targets_lengths = targets_lengths
 			log('Initialized Tacotron model. Dimensions (? = dynamic shape): ')
-			log(f'  Train mode:               {is_training}')
-			log(f'  Eval mode:                {is_evaluating}')
-			log(f'  GTA mode:                 {gta}')
-			log(f'  Synthesis mode:           {not (is_training or is_evaluating)}')
-			log(f'  embedding:                {embedded_inputs.shape}')
-			log(f'  enc conv out:             {enc_conv_output_shape}')
-			log(f'  encoder out:              {encoder_outputs.shape}')
-			log(f'  decoder out:              {decoder_output.shape}')
-			log(f'  residual out:             {residual.shape}')
-			log(f'  projected residual out:   {projected_residual.shape}')
-			log(f'  mel out:                  {mel_outputs.shape}')
-			log(f'  <stop_token> out:         {stop_token_prediction.shape}')
+			log('  Train mode:               {}'.format(is_training))
+			log('  Eval mode:                {}'.format(is_evaluating))
+			log('  GTA mode:                 {}'.format(gta))
+			log('  Synthesis mode:           {}'.format(not (is_training or is_evaluating)))
+			log('  embedding:                {}'.format(embedded_inputs.shape))
+			log('  enc conv out:             {}'.format(enc_conv_output_shape))
+			log('  encoder out:              {}'.format(encoder_outputs.shape))
+			log('  decoder out:              {}'.format(decoder_output.shape))
+			log('  residual out:             {}'.format(residual.shape))
+			log('  projected residual out:   {}'.format(projected_residual.shape))
+			log('  mel out:                  {}'.format(mel_outputs.shape))
+			if post_condition:
+				log('  linear out:               {}'.format(linear_outputs.shape))
+			log('  <stop_token> out:         {}'.format(stop_token_prediction.shape))
 
 
 	def add_loss(self):
@@ -161,12 +198,21 @@ class Tacotron():
 
 			if hp.mask_decoder:
 				# Compute loss of predictions before postnet
-				before = MaskedMSE(self.mel_targets, self.decoder_output, self.targets_lengths, hparams=self._hparams)
+				before = MaskedMSE(self.mel_targets, self.decoder_output, self.targets_lengths,
+					hparams=self._hparams)
 				# Compute loss after postnet
-				after = MaskedMSE(self.mel_targets, self.mel_outputs, self.targets_lengths, hparams=self._hparams)
+				after = MaskedMSE(self.mel_targets, self.mel_outputs, self.targets_lengths,
+					hparams=self._hparams)
 				#Compute <stop_token> loss (for learning dynamic generation stop)
 				stop_token_loss = MaskedSigmoidCrossEntropy(self.stop_token_targets,
 					self.stop_token_prediction, self.targets_lengths, hparams=self._hparams)
+				#Compute masked linear loss
+				if hp.predict_linear:
+					#Compute Linear L1 mask loss (priority to low frequencies)
+					linear_loss = MaskedLinearLoss(self.linear_targets, self.linear_outputs,
+						self.targets_lengths, hparams=self._hparams)
+				else:
+					linear_loss=0.
 			else:
 				# guided_attention loss
 				N = self._hparams.max_text_length
@@ -185,6 +231,17 @@ class Tacotron():
 					labels=self.stop_token_targets,
 					logits=self.stop_token_prediction))
 
+				if hp.predict_linear:
+					#Compute linear loss
+					#From https://github.com/keithito/tacotron/blob/tacotron2-work-in-progress/models/tacotron.py
+					#Prioritize loss for frequencies under 2000 Hz.
+					# l1 = tf.abs(self.linear_targets - self.linear_outputs)
+					# n_priority_freq = int(4000 / (hp.sample_rate * 0.5) * hp.num_freq)
+					# linear_loss = 0.5 * tf.reduce_mean(l1) + 0.5 * tf.reduce_mean(l1[:,:,0:n_priority_freq])
+					linear_loss = tf.losses.mean_squared_error(self.linear_targets, self.linear_outputs)
+				else:
+					linear_loss = 0.
+
 			# Compute the regularization weight
 			if hp.tacotron_scale_regularization:
 				reg_weight_scaler = 1. / (2 * hp.max_abs_value) if hp.symmetric_mels else 1. / (hp.max_abs_value)
@@ -202,8 +259,10 @@ class Tacotron():
 			self.after_loss = after
 			self.stop_token_loss = stop_token_loss
 			self.regularization_loss = regularization
+			self.linear_loss = linear_loss
 			self.attention_loss = attention_loss
-			self.loss = self.before_loss + self.after_loss + self.stop_token_loss + self.regularization_loss + self.attention_loss
+
+			self.loss = self.before_loss + self.after_loss + self.stop_token_loss + self.regularization_loss + self.linear_loss + self.attention_loss
 
 	def add_optimizer(self, global_step):
 		'''Adds optimizer. Sets "gradients" and "optimize" fields. add_loss must have been called.
@@ -234,7 +293,8 @@ class Tacotron():
 			# Add dependency on UPDATE_OPS; otherwise batchnorm won't work correctly. See:
 			# https://github.com/tensorflow/tensorflow/issues/1122
 			with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
-				self.optimize = optimizer.apply_gradients(zip(clipped_gradients, variables), global_step)
+				self.optimize = optimizer.apply_gradients(zip(clipped_gradients, variables),
+					global_step=global_step)
 
 	def _learning_rate_decay(self, init_lr, global_step):
 		#################################################################
@@ -257,6 +317,7 @@ class Tacotron():
 			self.decay_steps,
 			self.decay_rate, #lr = 1e-5 around step 310k
 			name='lr_exponential_decay')
+
 
 		#clip learning rate by max and min values (initial and final values)
 		return tf.minimum(tf.maximum(lr, hp.tacotron_final_learning_rate), init_lr)

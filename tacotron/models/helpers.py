@@ -54,7 +54,7 @@ class TacoTestHelper(Helper):
 				finished = tf.reduce_all(tf.reduce_all(finished, axis=0)) #Safer option
 
 			# Feed last output frame as next input. outputs is [N, output_dim * r]
-			next_inputs = outputs[:, :self._output_dim]
+			next_inputs = outputs[:, -self._output_dim:]
 			next_state = state
 			return (finished, next_inputs, next_state)
 
@@ -74,7 +74,7 @@ class TacoTrainingHelper(Helper):
 
 			r = self._reduction_factor
 			# Feed every r-th target frame as input
-			self._targets = targets[:, ::r, :]
+			self._targets = targets[:, r-1::r, :]
 
 			#Maximal sequence length
 			self._lengths = tf.tile([tf.shape(self._targets)[1]], [self._batch_size])
@@ -121,7 +121,7 @@ class TacoTrainingHelper(Helper):
 			next_inputs = tf.cond(
 				tf.less(tf.random_uniform([], minval=0, maxval=1, dtype=tf.float32), self._ratio),
 				lambda: self._targets[:, time, :], #Teacher-forcing: return true frame
-				lambda: outputs[:,:self._output_dim])
+				lambda: outputs[:,-self._output_dim:])
 
 			#Pass on state
 			next_state = state

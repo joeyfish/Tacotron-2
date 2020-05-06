@@ -6,31 +6,40 @@ from scipy import signal
 from scipy.io import wavfile
 
 
-def dc_notch_filter(wav):
-	# code from speex
-	notch_radius = 0.982
-	den = notch_radius ** 2 + 0.7 * (1 - notch_radius) ** 2
-	b = np.array([1, -2, 1]) * notch_radius
-	a = np.array([1, -2 * notch_radius, den])
-	return signal.lfilter(b, a, wav)
-
 def load_wav(path, sr):
-	return librosa.core.load(path, sr=sr)
+	return librosa.core.load(path, sr=sr)[0]
 
 def save_wav(wav, path, hparams):
-	wav = dc_notch_filter(wav)
 	wav = wav / np.abs(wav).max() * 0.999
 	f1 = 0.5 * 32767 / max(0.01, np.max(np.abs(wav)))
 	f2 = np.sign(wav) * np.power(np.abs(wav), 0.95)
 	wav = f1 * f2
+	wav = signal.convolve(wav, signal.firwin(hparams.num_freq, [hparams.fmin, hparams.fmax], pass_zero=False, fs=hparams.sample_rate))
 	#proposed by @dsmiller
 	wavfile.write(path, hparams.sample_rate, wav.astype(np.int16))
+
+def save_wavenet_wav(wav, path, sr):
+	librosa.output.write_wav(path, wav, sr=sr)
 
 def preemphasis(wav, k):
 	return signal.lfilter([1, -k], [1], wav)
 
 def inv_preemphasis(wav, k):
 	return signal.lfilter([1], [1, -k], wav)
+
+#From https://github.com/r9y9/wavenet_vocoder/blob/master/audio.py
+def start_and_end_indices(quantized, silence_threshold=2):
+	for start in range(quantized.size):
+		if abs(quantized[start] - 127) > silence_threshold:
+			break
+	for end in range(quantized.size - 1, 1, -1):
+		if abs(quantized[end] - 127) > silence_threshold:
+			break
+
+	assert abs(quantized[start] - 127) > silence_threshold
+	assert abs(quantized[end] - 127) > silence_threshold
+
+	return start, end
 
 def trim_silence(wav, hparams):
 	'''Trim leading and trailing silence
@@ -71,7 +80,14 @@ def inv_linear_spectrogram(linear_spectrogram, hparams):
 		D = linear_spectrogram
 
 	S = _db_to_amp(D + hparams.ref_level_db) #Convert back to linear
-	return inv_preemphasis(_griffin_lim(S ** hparams.power, hparams), hparams.preemphasis)
+
+	if hparams.use_lws:
+		processor = _lws_processor(hparams)
+		D = processor.run_lws(S.astype(np.float64).T ** hparams.power)
+		y = processor.istft(D).astype(np.float32)
+		return inv_preemphasis(y, hparams.preemphasis)
+	else:
+		return inv_preemphasis(_griffin_lim(S ** hparams.power, hparams), hparams.preemphasis)
 
 def inv_mel_spectrogram(mel_spectrogram, hparams):
 	'''Converts mel spectrogram to waveform using librosa'''
@@ -81,7 +97,14 @@ def inv_mel_spectrogram(mel_spectrogram, hparams):
 		D = mel_spectrogram
 
 	S = _mel_to_linear(_db_to_amp(D + hparams.ref_level_db), hparams)  # Convert back to linear
-	return inv_preemphasis(_griffin_lim(S ** hparams.power, hparams), hparams.preemphasis)
+
+	if hparams.use_lws:
+		processor = _lws_processor(hparams)
+		D = processor.run_lws(S.astype(np.float64).T ** hparams.power)
+		y = processor.istft(D).astype(np.float32)
+		return inv_preemphasis(y, hparams.preemphasis)
+	else:
+		return inv_preemphasis(_griffin_lim(S ** hparams.power, hparams), hparams.preemphasis)
 
 def inv_spectrogram_tensorflow(spectrogram, hparams):
 	'''Builds computational graph to convert spectrogram to waveform using TensorFlow.
@@ -109,6 +132,10 @@ def inv_mel_spectrogram_tensorflow(mel_spectrogram, hparams):
 	S = _db_to_amp_tensorflow(D + hparams.ref_level_db)
 	S = _mel_to_linear(S, hparams)  # Convert back to linear
 	return _griffin_lim_tensorflow(S ** hparams.power, hparams)
+
+def _lws_processor(hparams):
+	import lws
+	return lws.lws(hparams.n_fft, get_hop_size(hparams), fftsize=hparams.win_size, mode="speech")
 
 def _griffin_lim(S, hparams):
 	'''librosa implementation of Griffin-Lim
@@ -138,10 +165,34 @@ def _griffin_lim_tensorflow(S, hparams):
 	return tf.squeeze(y, 0)
 
 def _stft(y, hparams):
-	return librosa.stft(y=y, n_fft=hparams.n_fft, hop_length=get_hop_size(hparams), win_length=hparams.win_size)
+	if hparams.use_lws:
+		return _lws_processor(hparams).stft(y).T
+	else:
+		return librosa.stft(y=y, n_fft=hparams.n_fft, hop_length=get_hop_size(hparams), win_length=hparams.win_size)
 
 def _istft(y, hparams):
 	return librosa.istft(y, hop_length=get_hop_size(hparams), win_length=hparams.win_size)
+
+def num_frames(length, fsize, fshift):
+	"""Compute number of time frames of spectrogram
+	"""
+	pad = (fsize - fshift)
+	if length % fshift == 0:
+		M = (length + pad * 2 - fsize) // fshift + 1
+	else:
+		M = (length + pad * 2 - fsize) // fshift + 2
+	return M
+
+
+def pad_lr(x, fsize, fshift):
+	"""Compute left and right padding
+	"""
+	M = num_frames(len(x), fsize, fshift)
+	pad = (fsize - fshift)
+	T = len(x) + 2 * pad
+	r = (M - 1) * fshift + fsize - T
+	return pad, pad + r
+
 
 # Conversions
 _mel_basis = None
